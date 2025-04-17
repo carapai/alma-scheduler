@@ -1,0 +1,36 @@
+{
+  "name": "bun-react-template",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.tsx",
+  "module": "src/index.tsx",
+  "scripts": {
+    "dev": "bun --hot src/index.tsx",
+    "start": "NODE_ENV=production bun src/index.tsx",
+    "build": "bun run build.ts"
+  },
+  "dependencies": {
+    "@ant-design/pro-components": "^2.8.7",
+    "@ant-design/v5-patch-for-react-19": "^1.0.3",
+    "@tanstack/react-query": "^5.74.3",
+    "antd": "^5.24.7",
+    "axios": "^1.8.4",
+    "bun-plugin-tailwind": "^0.0.15",
+    "cron-parser": "^5.1.1",
+    "dayjs": "^1.11.13",
+    "lucide-react": "^0.488.0",
+    "node-cron": "^3.0.3",
+    "node-schedule": "^2.1.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tailwindcss": "^4.1.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.9",
+    "@types/node-cron": "^3.0.11",
+    "@types/node-schedule": "^2.1.7",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2"
+  }
+}
