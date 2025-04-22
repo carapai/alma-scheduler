@@ -25,6 +25,7 @@ initializeSystem(async (schedule) => {
 });
 
 const server = serve({
+    port: 3003,
     routes: {
         "/*": index,
         "/api/schedules": {
