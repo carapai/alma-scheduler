@@ -49,22 +49,20 @@ export function scheduleFromRow(row: Schedule): Schedule {
         name: row.name,
         cronExpression: row.cronExpression,
         isActive: Boolean(row.isActive),
-        task: row.task,
         createdAt: new Date(row.createdAt),
         updatedAt: new Date(row.updatedAt),
         lastRun: row.lastRun ? new Date(row.lastRun) : undefined,
         progress: row.progress,
         status: row.status as Schedule["status"],
         lastStatus: row.lastStatus,
-        currentJobId: row.currentJobId,
         nextRun: row.isActive ? getNextRunTime(row.cronExpression) : undefined,
         maxRetries: row.maxRetries,
         retryDelay: row.retryDelay,
         retryAttempts: row.retryAttempts,
-        includeChildren: row.includeChildren,
-        pe: row.pe,
-        ou: row.ou,
         scorecard: row.scorecard,
+        message: row.message,
+        indicatorGroup: row.indicatorGroup,
+        periodType: row.periodType,
     };
 }
 // ==================== Utility Functions ====================
@@ -77,9 +75,6 @@ export function startScheduleJob(
         schedule.id,
         { tz: "Africa/Nairobi", rule: schedule.cronExpression },
         async () => {
-            console.log(
-                `Executing task for schedule ${schedule.id}: ${schedule.task}`,
-            );
             await func(schedule);
         },
     );

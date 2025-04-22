@@ -33,16 +33,14 @@ const server = serve({
                 const {
                     name,
                     cronExpression,
-                    task,
                     maxRetries = 3,
                     retryDelay = 60,
-                    pe,
-                    ou,
+                    indicatorGroup,
                     scorecard,
-                    includeChildren,
+                    periodType,
                 } = body;
 
-                if (!name || !cronExpression || !task) {
+                if (!name || !cronExpression) {
                     return Response.json(
                         { error: "Missing required fields" },
                         { status: 400 },
@@ -70,20 +68,18 @@ const server = serve({
                 const now = new Date().toISOString();
 
                 db.run(
-                    `INSERT INTO schedules (id, name, cronExpression, task, createdAt, updatedAt, isActive, progress, status, maxRetries, retryDelay,pe,ou,scorecard,includeChildren) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'idle', ?, ?, ?, ?, ?, ?)`,
+                    `INSERT INTO schedules (id, name, cronExpression, createdAt, updatedAt, isActive, progress, status, maxRetries, retryDelay, periodType, scorecard,indicatorGroup) VALUES (?, ?, ?, ?, ?, 0, 0, 'idle', ?, ?, ?, ?,?)`,
                     [
                         id,
                         name,
                         cronExpression,
-                        task,
                         now,
                         now,
                         maxRetries,
                         retryDelay,
-                        pe,
-                        ou,
+                        periodType,
                         scorecard,
-                        includeChildren,
+                        indicatorGroup,
                     ],
                 );
 
@@ -194,18 +190,16 @@ const server = serve({
                 const now = new Date().toISOString();
 
                 db.run(
-                    `UPDATE schedules set name = ?, cronExpression = ?, task = ?, updatedAt = ?, maxRetries = ?, retryDelay = ?, pe = ?, ou = ?, scorecard = ?, includeChildren = ? WHERE id = ?`,
+                    `UPDATE schedules set name = ?, cronExpression = ?, updatedAt = ?, maxRetries = ?, retryDelay = ?, scorecard = ?, indicatorGroup = ?, periodType = ? WHERE id = ?`,
                     [
                         merged.name,
                         merged.cronExpression,
-                        merged.task,
                         now,
                         merged.maxRetries,
                         merged.retryDelay,
-                        merged.pe,
-                        merged.ou,
                         merged.scorecard,
-                        merged.includeChildren,
+                        merged.indicatorGroup,
+                        merged.periodType,
                         id,
                     ],
                 );
@@ -336,5 +330,4 @@ const server = serve({
     },
     development: process.env.NODE_ENV !== "production",
 });
-
 console.log(`🚀 Server running at ${server.url}`);

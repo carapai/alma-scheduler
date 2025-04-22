@@ -1,3 +1,4 @@
+type PeriodType = "quarterly" | "monthly";
 export interface RetryConfig {
     maxAttempts: number;
     delaySeconds: number;
@@ -8,7 +9,6 @@ export interface Schedule {
     name: string;
     cronExpression: string;
     isActive: boolean;
-    task: string;
     createdAt: Date;
     updatedAt: Date;
     lastRun?: Date;
@@ -20,10 +20,10 @@ export interface Schedule {
     retryAttempts?: number;
     maxRetries: number;
     retryDelay: number;
-    pe: string;
     scorecard: number;
-    ou: string;
-    includeChildren: boolean;
+    message?: string;
+    indicatorGroup: string;
+    periodType: PeriodType;
 }
 
 export interface ProgressUpdate {

@@ -1,7 +1,17 @@
 import { Schedule } from "@/interfaces";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TableColumnsType } from "antd";
-import { Button, Flex, Form, Input, InputNumber, Modal, Table } from "antd";
+import {
+    Button,
+    Flex,
+    Form,
+    Input,
+    InputNumber,
+    Modal,
+    Progress,
+    Table,
+    Select,
+} from "antd";
 import {
     Play,
     Square,
@@ -53,7 +63,6 @@ const getStatusColor = (status?: string) => {
 const defaultSchedules: Partial<Schedule> = {
     name: "",
     cronExpression: "",
-    task: "",
     maxRetries: 3,
     retryDelay: 60,
 };
@@ -161,18 +170,11 @@ export function App() {
             dataIndex: "progress",
             render: (_, row) => {
                 return (
-                    <div className="space-y-1">
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                            <div
-                                className={`h-2 rounded-full ${getStatusColor(
-                                    row.status,
-                                )}`}
-                                style={{
-                                    width: `${row.progress}%`,
-                                }}
-                            />
-                        </div>
-                    </div>
+                    <Progress
+                        percent={row.progress}
+                        format={(val) => `${val?.toFixed(0)}%`}
+                        strokeColor="green"
+                    />
                 );
             },
         },
@@ -185,10 +187,7 @@ export function App() {
             title: "Next Run",
             dataIndex: "nextRun",
         },
-        {
-            title: "Message",
-            dataIndex: "lastStatus",
-        },
+
         {
             title: "Action",
             key: "action",
@@ -248,6 +247,7 @@ export function App() {
     }>({
         queryKey: ["repoData"],
         queryFn: () => fetch("/api/schedules").then((res) => res.json()),
+        refetchInterval: 1000,
     });
 
     const handleCancel = () => {
@@ -373,7 +373,18 @@ export function App() {
                     <Input />
                 </Form.Item>
 
-                <Form.Item name="task" label="Task">
+                <Form.Item name="indicatorGroup" label="Indicator Group">
+                    <Input />
+                </Form.Item>
+                <Form.Item name="periodType" label="Period Type">
+                    <Select>
+                        <Select.Option value="quarterly">
+                            Quarterly
+                        </Select.Option>
+                        <Select.Option value="monthly">Monthly</Select.Option>
+                    </Select>
+                </Form.Item>
+                {/* <Form.Item name="task" label="Task">
                     <Input />
                 </Form.Item>
 
@@ -383,9 +394,18 @@ export function App() {
 
                 <Form.Item name="retryDelay" label="Retry Delay">
                     <InputNumber style={{ width: "100%" }} />
-                </Form.Item>
+                </Form.Item> */}
             </Modal>
-            <Table columns={columns} dataSource={data.schedules} rowKey="id" />
+            <Table
+                columns={columns}
+                dataSource={data.schedules}
+                rowKey="id"
+                expandable={{
+                    expandedRowRender: (record) => (
+                        <pre>{JSON.stringify(record, null, 2)}</pre>
+                    ),
+                }}
+            />
         </Flex>
     );
 }
