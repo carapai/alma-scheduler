@@ -1,330 +1,355 @@
+import { UnifiedQueue } from "@/unified-queue";
+import { JobRequest, queryDHIS2 } from "@/utils";
 import { serve } from "bun";
+import { RecordId, Surreal } from "surrealdb";
+import { surrealdbNodeEngines } from "@surrealdb/node";
 import index from "./index.html";
-import { db, initializeDatabase } from "@/db";
-import { Schedule } from "@/interfaces";
-import {
-    restoreActiveSchedules,
-    scheduleFromRow,
-    startScheduleJob,
-} from "@/schedule";
 
-import * as cron from "node-cron";
-import { queryDHIS2 } from "./utils";
+const jobQueue = new UnifiedQueue<Record<string, any>, Record<string, any>>(
+    "api-jobs",
+    {},
+);
+jobQueue.registerProcessor(
+    "alma-dhis2",
+    jobQueue.createProgressTrackingProcessor(async (job, updateProgress) => {
+        const jobData = job.data;
+        await queryDHIS2(jobData, updateProgress);
+        return { success: true, result: "Task completed" };
+    }),
+);
+jobQueue.startProcessing(4);
 
-const runningJobs: Map<string, cron.ScheduledTask> = new Map();
-
-function initializeSystem(func: (schedule: Schedule) => Promise<void>) {
-    console.log("Initializing schedule system...");
-    initializeDatabase();
-    restoreActiveSchedules(func);
-    console.log("Schedule system initialized");
-}
-
-initializeSystem(async (schedule) => {
-    await queryDHIS2(schedule);
+const db = new Surreal({
+    engines: surrealdbNodeEngines(),
 });
-
 const server = serve({
     port: 3003,
     routes: {
         "/*": index,
-        "/api/schedules": {
-            async POST(req) {
-                const body = await req.json();
-                const {
-                    name,
-                    cronExpression,
-                    maxRetries = 3,
-                    retryDelay = 60,
-                    indicatorGroup,
-                    scorecard,
-                    periodType,
-                } = body;
-
-                if (!name || !cronExpression) {
-                    return Response.json(
-                        { error: "Missing required fields" },
-                        { status: 400 },
-                    );
-                }
-                if (maxRetries < 0 || maxRetries > 10) {
-                    return Response.json(
-                        {
-                            error: "maxRetries must be between 0 and 10",
-                        },
-                        { status: 400 },
-                    );
-                }
-
-                if (retryDelay < 0 || retryDelay > 3600) {
-                    return Response.json(
-                        {
-                            error: "retryDelay must be between 0 and 3600 seconds",
-                        },
-                        { status: 400 },
-                    );
-                }
-
-                const id = crypto.randomUUID();
-                const now = new Date().toISOString();
-
-                db.run(
-                    `INSERT INTO schedules (id, name, cronExpression, createdAt, updatedAt, isActive, progress, status, maxRetries, retryDelay, periodType, scorecard,indicatorGroup) VALUES (?, ?, ?, ?, ?, 0, 0, 'idle', ?, ?, ?, ?,?)`,
-                    [
-                        id,
-                        name,
-                        cronExpression,
-                        now,
-                        now,
-                        maxRetries,
-                        retryDelay,
-                        periodType,
-                        scorecard,
-                        indicatorGroup,
-                    ],
-                );
-
-                const schedule = db
-                    .query<Schedule, string>(
-                        "SELECT * FROM schedules WHERE id = ?",
-                    )
-                    .get(id);
-
-                if (!schedule) {
-                    return Response.json(
-                        { error: "Schedule not found" },
-                        { status: 404 },
-                    );
-                }
-
+        "/api/processors": {
+            async GET() {
                 return Response.json(
                     {
-                        message: "Schedule created successfully",
-                        schedule: scheduleFromRow(schedule),
+                        success: true,
+                        processors: jobQueue.getProcessors(),
                     },
-                    { status: 201 },
-                );
-            },
-            async GET() {
-                const schedules = db
-                    .query<Schedule, null>("SELECT * FROM schedules")
-                    .all(null);
-                console.log(schedules);
-                return Response.json({
-                    schedules: schedules.map(scheduleFromRow),
-                });
-            },
-        },
-        "/api/schedules/:id": {
-            async GET(req) {
-                const id = req.params.id;
-                const schedule = db
-                    .query<Schedule, string>(
-                        "SELECT * FROM schedules WHERE id = ?",
-                    )
-                    .get(id);
-
-                if (!schedule) {
-                    return Response.json(
-                        {
-                            error: "Schedule not found",
-                        },
-                        { status: 404 },
-                    );
-                }
-                return Response.json(
-                    { schedule: scheduleFromRow(schedule) },
                     { status: 200 },
                 );
             },
-            async DELETE(req) {
-                const id = req.params.id;
-                const schedule = db
-                    .query<Schedule, string>(
-                        "SELECT * FROM schedules WHERE id = ?",
-                    )
-                    .get(id);
-
-                if (!schedule) {
-                    return Response.json(
-                        { error: "Schedule not found" },
-                        { status: 404 },
-                    );
-                }
+        },
+        "/api/instances": {
+            async GET() {
+                const file = Bun.file("configuration.json");
+                const {
+                    "dhis2-instances": dhisInstances,
+                    "alma-instances": almaInstances,
+                }: {
+                    "dhis2-instances": Record<
+                        string,
+                        { username: string; password: string }
+                    >;
+                    "alma-instances": Record<
+                        string,
+                        { username: string; password: string; backend: string }
+                    >;
+                } = await file.json();
+                return Response.json(
+                    {
+                        success: true,
+                        dhis2Instances: Object.keys(dhisInstances),
+                        almaInstances: Object.keys(almaInstances),
+                    },
+                    { status: 200 },
+                );
+            },
+        },
+        "/api/jobs": {
+            async GET() {
                 try {
-                    if (schedule.isActive) {
-                        const job = runningJobs.get(id);
-                        if (job) {
-                            job.stop();
-                            runningJobs.delete(id);
-                        }
-                    }
-
-                    db.run("DELETE FROM schedules WHERE id = ?", [id]);
-                    return Response.json({
-                        message: "Schedule deleted successfully",
+                    await db.connect("surrealkv://scheduler", {
+                        database: "scheduler",
+                        namespace: "scheduler",
                     });
+                    const [jobs] = await db.query<[JobRequest[]]>(
+                        "select * from jobs",
+                    );
+                    const realJobs = await jobQueue.getJobs();
+                    const fullJobs = jobs.map((job) => {
+                        const id = job.id as unknown as RecordId;
+                        const currentJob = realJobs.find((j) => j.id === id.id);
+                        let updatedJob = {
+                            ...job,
+                            id: id.id,
+                        };
+                        if (currentJob) {
+                            updatedJob.progress = String(currentJob.progress);
+                        }
+                        return updatedJob;
+                    });
+                    return Response.json(
+                        {
+                            success: true,
+                            count: jobs.length,
+                            jobs: fullJobs,
+                        },
+                        { status: 200 },
+                    );
                 } catch (error) {
                     return Response.json(
-                        { error: "Failed to delete schedule" },
+                        {
+                            success: false,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error),
+                        },
                         { status: 500 },
                     );
+                } finally {
+                    await db.close();
                 }
             },
-            async PUT(req) {
-                const id = req.params.id;
-                const currentSchedule: Partial<Schedule> = await req.json();
-                const schedule = db
-                    .query<Schedule, string>(
-                        "SELECT * FROM schedules WHERE id = ?",
-                    )
-                    .get(id);
-
-                if (!schedule) {
-                    return Response.json(
-                        { error: "Schedule not found" },
-                        { status: 404 },
+            async POST(req: {
+                json: () => JobRequest | PromiseLike<JobRequest>;
+            }) {
+                try {
+                    await db.connect("surrealkv://scheduler", {
+                        database: "scheduler",
+                        namespace: "scheduler",
+                    });
+                    const jobRequest = await req.json();
+                    const [job] = await db.insert<JobRequest>(
+                        "jobs",
+                        jobRequest,
                     );
+                    return Response.json(
+                        {
+                            success: true,
+                            job: { ...job, id: job.id.id },
+                        },
+                        { status: 201 },
+                    );
+                } catch (error) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error),
+                        },
+                        { status: 500 },
+                    );
+                } finally {
+                    await db.close();
                 }
-                const merged = { ...schedule, ...currentSchedule };
+            },
+        },
+        "/api/jobs/:id": {
+            async GET(req: { params: { id: string } }) {
+                try {
+                    await db.connect("surrealkv://scheduler", {
+                        database: "scheduler",
+                        namespace: "scheduler",
+                    });
+                    const job = await db.select<JobRequest>(
+                        new RecordId("jobs", req.params.id),
+                    );
+                    return Response.json(
+                        {
+                            success: true,
+                            job,
+                        },
+                        { status: 200 },
+                    );
+                } catch (error) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error),
+                        },
+                        { status: 500 },
+                    );
+                } finally {
+                    await db.close();
+                }
+            },
+            async DELETE(req: { params: { id: string } }) {
+                try {
+                    await db.connect("surrealkv://scheduler", {
+                        database: "scheduler",
+                        namespace: "scheduler",
+                    });
+                    await jobQueue.cancelJob(req.params.id);
+                    await db.delete(new RecordId("jobs", req.params.id));
+                    return Response.json(
+                        {
+                            success: true,
+                            message: "Job canceled and deleted successfully",
+                        },
+                        { status: 200 },
+                    );
+                } catch (error) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error),
+                        },
+                        { status: 500 },
+                    );
+                } finally {
+                    await db.close();
+                }
+            },
+            async PUT(req: {
+                params: { id: string };
+                json: () => JobRequest | PromiseLike<JobRequest>;
+            }) {
+                const jobRequest = await req.json();
 
-                const now = new Date().toISOString();
-
-                db.run(
-                    `UPDATE schedules set name = ?, cronExpression = ?, updatedAt = ?, maxRetries = ?, retryDelay = ?, scorecard = ?, indicatorGroup = ?, periodType = ? WHERE id = ?`,
-                    [
-                        merged.name,
-                        merged.cronExpression,
-                        now,
-                        merged.maxRetries,
-                        merged.retryDelay,
-                        merged.scorecard,
-                        merged.indicatorGroup,
-                        merged.periodType,
-                        id,
-                    ],
+                await db.connect("surrealkv://scheduler", {
+                    database: "scheduler",
+                    namespace: "scheduler",
+                });
+                const update = await db.update<JobRequest>(
+                    new RecordId("jobs", req.params.id),
+                    jobRequest,
                 );
-
+                await db.close();
                 return Response.json(
                     {
-                        schedule: scheduleFromRow(merged),
+                        success: true,
+                        job: { ...update, id: update.id.id },
                     },
                     { status: 200 },
                 );
             },
         },
-        "/api/schedules/:id/start": {
-            async POST(req) {
-                const id = req.params.id;
-                const scheduleRow = db
-                    .query<Schedule, string>(
-                        "SELECT * FROM schedules WHERE id = ?",
-                    )
-                    .get(id);
-                if (!scheduleRow) {
-                    return Response.json(
-                        { error: "Schedule not found" },
-                        { status: 404 },
-                    );
-                }
-                const schedule = scheduleFromRow(scheduleRow);
-
-                if (schedule.isActive) {
-                    return Response.json(
-                        { error: "Schedule is already running" },
-                        { status: 400 },
-                    );
-                }
-
+        "/api/jobs/:id/start": {
+            async POST(req: {
+                params: { id: string };
+                json: () => JobRequest | PromiseLike<JobRequest>;
+            }) {
                 try {
-                    startScheduleJob(schedule, queryDHIS2);
-                    db.run(
-                        `UPDATE schedules SET isActive = 1, updatedAt = ?, status = 'running', progress = 0 WHERE id = ?`,
-                        [new Date().toISOString(), id],
-                    );
-
-                    const updatedSchedule = db
-                        .query<Schedule, string>(
-                            "SELECT * FROM schedules WHERE id = ?",
-                        )
-                        .get(id);
-
-                    if (!updatedSchedule) {
-                        return Response.json(
-                            { error: "Schedule not found" },
-                            { status: 404 },
-                        );
-                    }
-                    return Response.json({
-                        message: "Schedule started successfully",
-                        schedule: scheduleFromRow(updatedSchedule),
+                    const jobRequest = await req.json();
+                    await db.connect("surrealkv://scheduler", {
+                        database: "scheduler",
+                        namespace: "scheduler",
                     });
-                } catch (error: any) {
-                    return Response.json(
-                        { error: "Failed to start schedule" },
-                        { status: 500, statusText: error.message },
+                    await jobQueue.addJob(jobRequest);
+
+                    const updatedJob = {
+                        ...jobRequest,
+                        isActive: false,
+                        status: "running",
+                    };
+
+                    await db.update(
+                        new RecordId("jobs", req.params.id),
+                        updatedJob,
                     );
+                    return Response.json(
+                        {
+                            success: true,
+                            job: updatedJob,
+                        },
+                        { status: 200 },
+                    );
+                } catch (error) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error),
+                        },
+                        { status: 500 },
+                    );
+                } finally {
+                    await db.close();
                 }
             },
         },
-        "/api/schedules/:id/stop": {
-            async POST(req) {
-                const id = req.params.id;
-                const scheduleRow = db
-                    .query<Schedule, string>(
-                        "SELECT * FROM schedules WHERE id = ?",
-                    )
-                    .get(id);
 
-                if (!scheduleRow) {
-                    return Response.json(
-                        { error: "Schedule not found" },
-                        { status: 404 },
-                    );
-                }
-
-                const schedule = scheduleFromRow(scheduleRow);
-
-                if (!schedule.isActive) {
-                    return Response.json(
-                        { error: "Schedule is not running" },
-                        { status: 400 },
-                    );
-                }
-
+        "/api/jobs/:id/stop": {
+            async POST(req: {
+                params: { id: string };
+                json: () => JobRequest | PromiseLike<JobRequest>;
+            }) {
                 try {
-                    const job = runningJobs.get(id);
-                    if (job) {
-                        job.stop();
-                        runningJobs.delete(id);
-                    }
-
-                    db.run(
-                        `UPDATE schedules SET isActive = 0, updatedAt = ?, status = 'idle' WHERE id = ?`,
-                        [new Date().toISOString(), id],
-                    );
-
-                    const updatedSchedule = db
-                        .query<Schedule, string>(
-                            "SELECT * FROM schedules WHERE id = ?",
-                        )
-                        .get(id);
-
-                    if (!updatedSchedule) {
-                        return Response.json(
-                            { error: "Schedule not found" },
-                            { status: 404 },
-                        );
-                    }
-                    return Response.json({
-                        message: "Schedule stopped successfully",
-                        schedule: scheduleFromRow(updatedSchedule),
+                    const jobRequest = await req.json();
+                    await db.connect("surrealkv://scheduler", {
+                        database: "scheduler",
+                        namespace: "scheduler",
                     });
-                } catch (error: any) {
-                    return Response.json(
-                        { error: "Failed to stop schedule" },
-                        { status: 500, statusText: error.message },
+
+                    await jobQueue.cancelJob(req.params.id);
+                    const updatedJob = {
+                        ...jobRequest,
+                        isActive: false,
+                        status: "idle",
+                    };
+                    await db.update(
+                        new RecordId("jobs", req.params.id),
+                        updatedJob,
                     );
+                    return Response.json(
+                        {
+                            success: true,
+                            job: updatedJob,
+                        },
+                        { status: 200 },
+                    );
+                } catch (error) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error),
+                        },
+                        { status: 500 },
+                    );
+                } finally {
+                    await db.close();
+                }
+            },
+        },
+        "/api/jobs/:id/delete": {
+            async DELETE(req: { params: { id: string } }) {
+                try {
+                    await db.connect("surrealkv://scheduler", {
+                        database: "scheduler",
+                        namespace: "scheduler",
+                    });
+                    await db.delete(req.params.id);
+                    return Response.json(
+                        {
+                            success: true,
+                        },
+                        { status: 200 },
+                    );
+                } catch (error) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error),
+                        },
+                        { status: 500 },
+                    );
+                } finally {
+                    await db.close();
                 }
             },
         },
