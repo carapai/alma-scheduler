@@ -14,6 +14,23 @@ jobQueue.registerProcessor(
     jobQueue.createProgressTrackingProcessor(async (job, updateProgress) => {
         const jobData = job.data;
         await queryDHIS2(jobData, updateProgress);
+				console.log(job.id);
+        
+				await db.connect("surrealkv://scheduler", {
+            database: "scheduler",
+            namespace: "scheduler",
+        });
+
+
+        // const jobRequest = await db.select<JobRequest>(
+        //     new RecordId("jobs", req.params.id),
+        // );
+
+        // const updatedJob = {
+        //     ...jobRequest,
+        //     isActive: false,
+        //     status: "running",
+        // };
         return { success: true, result: "Task completed" };
     }),
 );
@@ -76,7 +93,9 @@ const server = serve({
                     const realJobs = await jobQueue.getJobs();
                     const fullJobs = jobs.map((job) => {
                         const id = job.id as unknown as RecordId;
-                        const currentJob = realJobs.find((j) => j.id === id.id);
+                        const currentJob = realJobs.find(
+                            (j) => j?.id === id.id,
+                        );
                         let updatedJob = {
                             ...job,
                             id: id.id,
@@ -291,6 +310,7 @@ const server = serve({
                     });
 
                     await jobQueue.cancelJob(req.params.id);
+
                     const updatedJob = {
                         ...jobRequest,
                         isActive: false,

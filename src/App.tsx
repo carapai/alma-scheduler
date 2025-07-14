@@ -136,7 +136,6 @@ export function App() {
     const { form, Field, NestedField, DeepField, useWatch } = createTypedForm();
 
     const periodType = useWatch(["data", "periodType"], form);
-
     const handleStart = async (job: JobRequest) => {
         try {
             setIsEditing(true);
@@ -185,7 +184,6 @@ export function App() {
     const handleDelete = async (job: JobRequest) => {
         setIsEditing(() => true);
         setCurrent(job);
-        console.log(job)
         if (window.confirm("Are you sure you want to delete this job?")) {
             try {
                 const request = new Request(`/api/jobs/${job.id}`, {
@@ -210,10 +208,6 @@ export function App() {
     };
 
     const startEdit = (job: JobRequest) => {
-        // const { data, name } = job;
-
-        // const { period, ...rest } = data;
-
         setIsEditing(() => true);
         setCurrent(() => ({
             ...job,
@@ -276,21 +270,21 @@ export function App() {
             render: (_, row) => {
                 return (
                     <Flex gap="10px">
-                        {!row.isActive ? (
-                            <button
-                                onClick={() => handleStart(row)}
-                                className="p-1 hover:bg-gray-100 rounded cursor-pointer"
-                                title="Start"
-                            >
-                                <Play className="w-4 h-4" />
-                            </button>
-                        ) : (
+                        {row.isActive ? (
                             <button
                                 onClick={() => handleStop(row)}
                                 className="p-1 hover:bg-gray-100 rounded cursor-pointer"
                                 title="Stop"
                             >
                                 <Square className="w-4 h-4" />
+                            </button>
+                        ) : (
+                            <button
+                                onClick={() => handleStart(row)}
+                                className="p-1 hover:bg-gray-100 rounded cursor-pointer"
+                                title="Start"
+                            >
+                                <Play className="w-4 h-4" />
                             </button>
                         )}
                         <button
@@ -402,7 +396,7 @@ export function App() {
             if (prev && editing === true) {
                 return {
                     jobs: prev.jobs.flatMap((s) => {
-                        if (s.id && job &&  job.id && s.id === job.id) {
+                        if (s.id && job && job.id && s.id === job.id) {
                             if (remove) {
                                 return [];
                             }
@@ -825,7 +819,6 @@ export function App() {
                                                                 },
                                                             ]}
                                                         />
-
                                                         <DeepField
                                                             name={[
                                                                 "jobOptions",

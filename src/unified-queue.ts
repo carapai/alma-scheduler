@@ -57,8 +57,8 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
      * @param options Job options including scheduling
      * @returns The created job
      */
-    async addJob({ jobOptions, jobName, data, id }: JobRequest) {
-        const jobId = id.toString();
+    async addJob({ jobOptions = {}, jobName, data, id, ...rest }: JobRequest) {
+        const jobId = id;
         console.log(`Adding job '${jobName}' with jobOptions:`, jobOptions);
         if (
             data["schedule"] &&
@@ -75,10 +75,14 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
                 .flat()
                 .join(" ");
         }
+
         const job = await this.queue.add(jobName as any, data as any, {
             ...jobOptions,
             jobId,
+            removeOnComplete: true,
+            removeOnFail: true,
         });
+        console.log(job.asJSON());
         return job;
     }
 
@@ -183,7 +187,7 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
      */
     async cancelJob(jobId: string): Promise<boolean> {
         const job = await this.queue.getJob(jobId);
-
+				console.log(job);
         if (!job) {
             return false;
         }

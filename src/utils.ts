@@ -127,6 +127,7 @@ export const queryDHIS2 = async (
     data: Record<string, any>,
     updateProgress: (progress: JobProgress) => Promise<void>,
 ) => {
+    console.log(data);
     const {
         scorecard,
         periodType,
@@ -186,13 +187,13 @@ export const queryDHIS2 = async (
             },
         });
 
-        const totalIterations = 6 * indicators.length * availablePeriod.length;
+        const totalIterations = 1 * indicators.length * availablePeriod.length;
 
         console.log(availablePeriod);
 
         let count = 0;
         for (const p of availablePeriod) {
-            for (let level = 1; level <= 6; level++) {
+            for (let level = 1; level <= 1; level++) {
                 for (const [index, x] of indicators.entries()) {
                     count++;
                     await downloadCSV({
