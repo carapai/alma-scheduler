@@ -81,45 +81,15 @@ export function App() {
     const scheduleType = Form.useWatch("type", form);
     const periodType = Form.useWatch(["data", "periodType"], form);
 
-    const handleProgressUpdate = useCallback((id: string, progress: number, message?: string) => {
-        console.log(`Progress update for ${id}: ${progress}% - ${message}`);
-        queryClient.setQueryData<{ schedules: Schedule[] }>(["schedules"], (prev) => {
-            if (prev) {
-                return {
-                    schedules: prev.schedules.map((schedule) =>
-                        schedule.id === id ? { ...schedule, progress, message: message || schedule.message } : schedule
-                    ),
-                };
-            }
-            return prev;
-        });
-    }, [queryClient]);
 
     const { isConnected, lastMessage, connectionError } = useWebSocket("/ws");
     useEffect(() => {
         if (lastMessage) {
-            if (lastMessage.type === "progress_update" && "id" in lastMessage.data && "progress" in lastMessage.data) {
-                const progressData = lastMessage.data as { id: string; progress: number; message?: string };
-                handleProgressUpdate(progressData.id, progressData.progress, progressData.message);
-            } else if (lastMessage.type === "schedule_update" && "id" in lastMessage.data) {
-                // Handle schedule updates by updating the specific schedule
-                const scheduleData = lastMessage.data as Schedule;
-                queryClient.setQueryData<{ schedules: Schedule[] }>(["schedules"], (prev) => {
-                    if (prev) {
-                        return {
-                            schedules: prev.schedules.map((schedule) =>
-                                schedule.id === scheduleData.id ? { ...schedule, ...scheduleData } : schedule
-                            ),
-                        };
-                    }
-                    return prev;
-                });
-            } else {
-                // Only invalidate for other message types (created, deleted, etc.)
-                queryClient.invalidateQueries({ queryKey: ["schedules"] });
-            }
+            console.log("WebSocket message received:", lastMessage);
+            // For all message types, just invalidate the query to get fresh data
+            queryClient.invalidateQueries({ queryKey: ["schedules"] });
         }
-    }, [lastMessage, queryClient, handleProgressUpdate]);
+    }, [lastMessage, queryClient]);
 
     React.useEffect(() => {
         if (scheduleType !== "recurring") {
@@ -356,22 +326,24 @@ export function App() {
                     almaInstances: [],
                 };
 
-                if (!isPending && !hasErrors) {
-                    const [schedulesResult, processorsResult, instancesResult] =
-                        results;
+                const [schedulesResult, processorsResult, instancesResult] = results;
 
-                    if (schedulesResult.data?.success) {
-                        schedules = schedulesResult.data.schedules;
-                    }
-                    if (processorsResult.data?.success) {
-                        processors = processorsResult.data.processors;
-                    }
-                    if (instancesResult.data?.success) {
-                        instances = {
-                            dhis2Instances: instancesResult.data.dhis2Instances,
-                            almaInstances: instancesResult.data.almaInstances,
-                        };
-                    }
+                // Get schedules data (even if pending, keep previous data)
+                if (schedulesResult.data?.success) {
+                    schedules = schedulesResult.data.schedules;
+                } else if (schedulesResult.data && Array.isArray(schedulesResult.data)) {
+                    // Fallback if data structure is different
+                    schedules = schedulesResult.data;
+                }
+
+                if (processorsResult.data?.success) {
+                    processors = processorsResult.data.processors;
+                }
+                if (instancesResult.data?.success) {
+                    instances = {
+                        dhis2Instances: instancesResult.data.dhis2Instances,
+                        almaInstances: instancesResult.data.almaInstances,
+                    };
                 }
 
                 return {
