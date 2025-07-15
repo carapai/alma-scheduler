@@ -24,7 +24,10 @@ export class Scheduler {
             "dhis2-alma-sync",
             this.jobQueue.createProgressTrackingProcessor(
                 async (job, updateProgress) => {
-                    const scheduleId = job.opts.jobId ?? "";
+                    // Use scheduleId from job data instead of job ID
+                    const scheduleId = job.data.scheduleId || job.opts.jobId || "";
+                    console.log(`Processing job ${job.id} for schedule ${scheduleId}`);
+                    
                     const runningSchedule =
                         await scheduleService.updateScheduleStatus(
                             scheduleId,
@@ -35,7 +38,7 @@ export class Scheduler {
                     try {
                         const progressCallback = async (progress: any) => {
                             console.log(
-                                `Progress update for ${scheduleId}: ${progress}`,
+                                `Progress update for schedule ${scheduleId} (job ${job.id}): ${progress}`,
                             );
                             await updateProgress(progress);
 
@@ -51,7 +54,7 @@ export class Scheduler {
                                 progressNum,
                             );
 
-                            console.log(`Broadcasting progress ${progressNum}% for ${scheduleId} to ${webSocketService.getConnectionCount()} connections`);
+                            console.log(`Broadcasting progress ${progressNum}% for schedule ${scheduleId} to ${webSocketService.getConnectionCount()} connections`);
                             webSocketService.broadcastProgress(
                                 scheduleId,
                                 progressNum,
@@ -122,17 +125,6 @@ export class Scheduler {
         // Broadcast progress reset to UI
         webSocketService.broadcastProgress(id, 0, "Starting job...");
         
-        // Test progress updates
-        setTimeout(() => {
-            webSocketService.broadcastProgress(id, 25, "Test progress 25%");
-        }, 1000);
-        setTimeout(() => {
-            webSocketService.broadcastProgress(id, 50, "Test progress 50%");
-        }, 2000);
-        setTimeout(() => {
-            webSocketService.broadcastProgress(id, 75, "Test progress 75%");
-        }, 3000);
-        
         await this.setupJob(updatedSchedule!);
         return updatedSchedule!;
     }
@@ -142,7 +134,14 @@ export class Scheduler {
         if (!schedule) {
             throw new Error(`Schedule ${id} not found`);
         }
-        await this.jobQueue.cancelJob(id);
+        
+        // Cancel the appropriate job based on schedule type
+        if (schedule.type === "recurring") {
+            await this.jobQueue.cancelJob(`recurring-${id}`);
+        } else {
+            await this.jobQueue.cancelJob(id);
+        }
+        
         await scheduleService.deactivateSchedule(id);
 
         return schedule;
@@ -157,7 +156,12 @@ export class Scheduler {
     }
 
     private async setupJob(schedule: Schedule) {
-        await this.jobQueue.cancelJob(schedule.id);
+        // Cancel existing jobs for this schedule
+        if (schedule.type === "recurring") {
+            await this.jobQueue.cancelJob(`recurring-${schedule.id}`);
+        } else {
+            await this.jobQueue.cancelJob(schedule.id);
+        }
         const jobData = {
             processor: schedule.processor,
             dhis2Instance:
@@ -170,19 +174,26 @@ export class Scheduler {
             period: schedule.data.periods,
             runFor: schedule.data.runFor,
             ...schedule.data,
+            scheduleId: schedule.id, // Add schedule ID to job data
         };
 
         const jobOptions: JobsOptions = {
             removeOnComplete: true,
             removeOnFail: true,
-            jobId: schedule.id,
         };
 
         if (schedule.type === "recurring" && schedule.cronExpression) {
+            // For recurring jobs, don't use schedule ID as job ID
+            // Let BullMQ generate unique job IDs for each execution
             jobOptions.repeat = {
                 pattern: schedule.cronExpression,
                 immediately: schedule.runImmediately,
             };
+            // Use schedule ID as repeat job key for easier cancellation
+            jobOptions.jobId = `recurring-${schedule.id}`;
+        } else {
+            // For one-time jobs, use schedule ID as job ID
+            jobOptions.jobId = schedule.id;
         }
 
         const job = await this.jobQueue.addJob({
