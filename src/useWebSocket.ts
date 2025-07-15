@@ -42,7 +42,7 @@ export function useWebSocket(url: string): WebSocketHook {
             wsRef.current = new WebSocket(wsUrl);
 
             wsRef.current.onopen = () => {
-                console.log("WebSocket connected");
+                console.log("WebSocket connected successfully");
                 setIsConnected(true);
                 setConnectionError(null);
                 reconnectAttempts.current = 0;
@@ -51,6 +51,7 @@ export function useWebSocket(url: string): WebSocketHook {
             wsRef.current.onmessage = (event) => {
                 try {
                     const message: WebSocketMessage = JSON.parse(event.data);
+                    console.log("Client received WebSocket message:", message);
                     setLastMessage(message);
                 } catch (error) {
                     console.error("Error parsing WebSocket message:", error);

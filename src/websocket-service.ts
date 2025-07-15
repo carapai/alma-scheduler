@@ -111,6 +111,7 @@ export class WebSocketService {
     }
 
     broadcastProgress(id: string, progress: number, message?: string) {
+        console.log(`Broadcasting progress update: ${id} - ${progress}% - ${message}`);
         this.broadcast({
             type: "progress_update",
             data: { id, progress, message },

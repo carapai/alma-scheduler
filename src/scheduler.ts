@@ -51,10 +51,11 @@ export class Scheduler {
                                 progressNum,
                             );
 
+                            console.log(`Broadcasting progress ${progressNum}% for ${scheduleId} to ${webSocketService.getConnectionCount()} connections`);
                             webSocketService.broadcastProgress(
                                 scheduleId,
                                 progressNum,
-                                `Processing... ${progressNum}%`,
+                                `Processing... ${progressNum.toFixed(1)}%`,
                             );
                         };
 
@@ -120,6 +121,17 @@ export class Scheduler {
         
         // Broadcast progress reset to UI
         webSocketService.broadcastProgress(id, 0, "Starting job...");
+        
+        // Test progress updates
+        setTimeout(() => {
+            webSocketService.broadcastProgress(id, 25, "Test progress 25%");
+        }, 1000);
+        setTimeout(() => {
+            webSocketService.broadcastProgress(id, 50, "Test progress 50%");
+        }, 2000);
+        setTimeout(() => {
+            webSocketService.broadcastProgress(id, 75, "Test progress 75%");
+        }, 3000);
         
         await this.setupJob(updatedSchedule!);
         return updatedSchedule!;
