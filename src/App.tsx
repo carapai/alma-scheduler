@@ -3,25 +3,26 @@ import { Schedule } from "@/interfaces";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import type { TableColumnsType } from "antd";
 import {
-    Button,
-    Flex,
-    Form,
-    Input,
-    InputNumber,
-    Modal,
-    Progress,
-    Select,
-    Switch,
-    Table,
-    Badge,
-    Tag,
-    DatePicker,
+	Badge,
+	Button,
+	DatePicker,
+	Flex,
+	Form,
+	Input,
+	InputNumber,
+	Modal,
+	Progress,
+	Select,
+	Switch,
+	Table,
+	Tag,
 } from "antd";
-import { Play, Square, Trash2, Settings, Wifi, WifiOff } from "lucide-react";
-import React, { useState, useCallback, useEffect } from "react";
-import { v4 as uuidv4 } from "uuid";
 import dayjs from "dayjs";
-import { useWebSocket } from "./useWebSocket";
+import { Play, Settings, Square, Trash2, Wifi, WifiOff } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
+import { useWebSocketDexie } from "./useWebSocketDexie";
+import { useScheduleData } from "./useScheduleData";
 
 const getStatusColor = (status?: string) => {
     switch (status) {
@@ -82,14 +83,17 @@ export function App() {
     const periodType = Form.useWatch(["data", "periodType"], form);
 
 
-    const { isConnected, lastMessage, connectionError } = useWebSocket("/ws");
+    // Use Dexie-based hooks
+    const { schedules: dexieSchedules, syncSchedules, upsertSchedule, deleteSchedule: deleteDexieSchedule, isLoading: dexieLoading } = useScheduleData();
+    const { isConnected, lastMessage, connectionError } = useWebSocketDexie("/ws");
+    
+    // Keep this for initial data load and other queries
     useEffect(() => {
         if (lastMessage) {
             console.log("WebSocket message received:", lastMessage);
-            // For all message types, just invalidate the query to get fresh data
-            queryClient.invalidateQueries({ queryKey: ["schedules"] });
+            // No need to invalidate queries - Dexie hooks handle updates automatically
         }
-    }, [lastMessage, queryClient]);
+    }, [lastMessage]);
 
     React.useEffect(() => {
         if (scheduleType !== "recurring") {
@@ -115,8 +119,10 @@ export function App() {
             );
             if (response.ok) {
                 const data = await response.json();
+                // Update Dexie directly
+                await upsertSchedule(data.schedule);
+                // Also update React Query for consistency
                 updateUI(data.schedule, true);
-                queryClient.invalidateQueries({ queryKey: ["schedules"] });
             }
         } catch (error) {
             console.error("Failed to start schedule:", error);
@@ -130,8 +136,10 @@ export function App() {
             });
             if (response.ok) {
                 const data = await response.json();
+                // Update Dexie directly
+                await upsertSchedule(data.schedule);
+                // Also update React Query for consistency
                 updateUI(data.schedule, true);
-                queryClient.invalidateQueries({ queryKey: ["schedules"] });
             }
         } catch (error) {
             console.error("Failed to stop schedule:", error);
@@ -145,6 +153,9 @@ export function App() {
                     method: "DELETE",
                 });
                 if (response.ok) {
+                    // Update Dexie directly
+                    await deleteDexieSchedule(schedule.id);
+                    // Also invalidate React Query for consistency
                     queryClient.invalidateQueries({ queryKey: ["schedules"] });
                 }
             } catch (error) {
@@ -290,7 +301,7 @@ export function App() {
         },
     ];
 
-    const { isPending, hasErrors, errors, schedules, processors, instances } =
+    const { isPending, hasErrors, errors, schedules: serverSchedules, processors, instances } =
         useQueries({
             queries: [
                 {
@@ -356,6 +367,16 @@ export function App() {
                 };
             },
         });
+    
+    // Sync server data with Dexie when it changes
+    useEffect(() => {
+        if (serverSchedules && serverSchedules.length > 0) {
+            syncSchedules(serverSchedules);
+        }
+    }, [serverSchedules, syncSchedules]);
+    
+    // Use Dexie schedules as primary data source, fall back to server data
+    const schedules = (dexieSchedules && dexieSchedules.length > 0 ? dexieSchedules : serverSchedules || []) as Schedule[];
 
     const handleCancel = () => {
         setIsModalOpen(false);
@@ -396,6 +417,10 @@ export function App() {
             });
 
             if (response.ok) {
+                const data = await response.json();
+                // Update Dexie directly
+                await upsertSchedule(data.schedule);
+                // Also invalidate React Query for consistency
                 queryClient.invalidateQueries({ queryKey: ["schedules"] });
                 setIsModalOpen(false);
                 setIsEditing(false);
@@ -407,7 +432,7 @@ export function App() {
         }
     };
 
-    if (isPending) return <div>Loading...</div>;
+    if (isPending || dexieLoading) return <div>Loading...</div>;
 
     if (hasErrors) {
         return (

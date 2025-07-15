@@ -10,7 +10,7 @@ export interface WebSocketHook {
     connectionError: string | null;
 }
 
-export function useWebSocket(url: string): WebSocketHook {
+export function useWebSocketDexie(url: string): WebSocketHook {
     const [isConnected, setIsConnected] = useState(false);
     const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
     const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -49,11 +49,14 @@ export function useWebSocket(url: string): WebSocketHook {
                 reconnectAttempts.current = 0;
             };
 
-            wsRef.current.onmessage = (event) => {
+            wsRef.current.onmessage = async (event) => {
                 try {
                     const message: WebSocketMessage = JSON.parse(event.data);
                     console.log("Client received WebSocket message:", message);
                     setLastMessage(message);
+                    
+                    // Update Dexie based on message type
+                    await handleWebSocketMessage(message);
                 } catch (error) {
                     console.error("Error parsing WebSocket message:", error);
                 }
@@ -86,6 +89,50 @@ export function useWebSocket(url: string): WebSocketHook {
         }
     };
 
+    const handleWebSocketMessage = async (message: WebSocketMessage) => {
+        switch (message.type) {
+            case "progress_update":
+                if ("id" in message.data && "progress" in message.data) {
+                    const { id, progress, message: progressMessage } = message.data as { id: string; progress: number; message?: string };
+                    console.log(`Updating Dexie progress for ${id}: ${progress}%`);
+                    await scheduleDB.updateScheduleProgress(id, progress, progressMessage);
+                }
+                break;
+            
+            case "schedule_update":
+                if ("id" in message.data) {
+                    const schedule = message.data as Schedule;
+                    console.log(`Updating Dexie schedule:`, schedule);
+                    await scheduleDB.upsertSchedule(schedule);
+                }
+                break;
+            
+            case "schedule_created":
+                const newSchedule = message.data as Schedule;
+                console.log(`Adding new schedule to Dexie:`, newSchedule);
+                await scheduleDB.upsertSchedule(newSchedule);
+                break;
+            
+            case "schedule_deleted":
+                if ("id" in message.data) {
+                    const { id } = message.data as { id: string };
+                    console.log(`Deleting schedule from Dexie: ${id}`);
+                    await scheduleDB.deleteSchedule(id);
+                }
+                break;
+            
+            case "schedule_started":
+            case "schedule_stopped":
+                const updatedSchedule = message.data as Schedule;
+                console.log(`Updating schedule status in Dexie:`, updatedSchedule);
+                await scheduleDB.upsertSchedule(updatedSchedule);
+                break;
+            
+            default:
+                console.log(`Unhandled message type: ${message.type}`);
+        }
+    };
+
     const sendMessage = (message: any) => {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify(message));
@@ -111,54 +158,6 @@ export function useWebSocket(url: string): WebSocketHook {
         isConnected,
         lastMessage,
         sendMessage,
-        connectionError,
-    };
-}
-
-export function useScheduleWebSocket(
-    onScheduleUpdate: (schedule: Schedule) => void,
-    onScheduleCreated: (schedule: Schedule) => void,
-    onScheduleDeleted: (id: string) => void,
-    onScheduleStarted: (schedule: Schedule) => void,
-    onScheduleStopped: (schedule: Schedule) => void,
-    onProgressUpdate?: (id: string, progress: number, message?: string) => void,
-) {
-    const { isConnected, lastMessage, connectionError } = useWebSocket("/ws");
-
-    useEffect(() => {
-        if (!lastMessage) return;
-
-        switch (lastMessage.type) {
-            case "schedule_update":
-                if ("id" in lastMessage.data) {
-                    onScheduleUpdate(lastMessage.data as Schedule);
-                }
-                break;
-            case "schedule_created":
-                onScheduleCreated(lastMessage.data as Schedule);
-                break;
-            case "schedule_deleted":
-                if ("id" in lastMessage.data) {
-                    onScheduleDeleted((lastMessage.data as { id: string }).id);
-                }
-                break;
-            case "schedule_started":
-                onScheduleStarted(lastMessage.data as Schedule);
-                break;
-            case "schedule_stopped":
-                onScheduleStopped(lastMessage.data as Schedule);
-                break;
-            case "progress_update":
-                if (onProgressUpdate && "id" in lastMessage.data && "progress" in lastMessage.data) {
-                    const progressData = lastMessage.data as { id: string; progress: number; message?: string };
-                    onProgressUpdate(progressData.id, progressData.progress, progressData.message);
-                }
-                break;
-        }
-    }, [lastMessage, onScheduleUpdate, onScheduleCreated, onScheduleDeleted, onScheduleStarted, onScheduleStopped, onProgressUpdate]);
-
-    return {
-        isConnected,
         connectionError,
     };
 }
