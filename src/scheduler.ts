@@ -25,7 +25,6 @@ export class Scheduler {
             this.jobQueue.createProgressTrackingProcessor(
                 async (job, updateProgress) => {
                     const scheduleId = job.opts.jobId ?? "";
-                    // Update status to running and broadcast
                     const runningSchedule =
                         await scheduleService.updateScheduleStatus(
                             scheduleId,
@@ -33,13 +32,13 @@ export class Scheduler {
                             "Job started",
                         );
                     webSocketService.broadcastScheduleUpdate(runningSchedule);
-
                     try {
-                        // Create a progress callback that broadcasts progress updates
                         const progressCallback = async (progress: any) => {
+                            console.log(
+                                `Progress update for ${scheduleId}: ${progress}`,
+                            );
                             await updateProgress(progress);
 
-                            // Convert progress to number for database storage
                             const progressNum =
                                 typeof progress === "number"
                                     ? progress
@@ -47,13 +46,11 @@ export class Scheduler {
                                     ? parseFloat(progress) || 0
                                     : 0;
 
-                            // Update progress in database
                             await scheduleService.updateScheduleProgress(
                                 scheduleId,
                                 progressNum,
                             );
 
-                            // Broadcast progress update
                             webSocketService.broadcastProgress(
                                 scheduleId,
                                 progressNum,
@@ -63,7 +60,6 @@ export class Scheduler {
 
                         await queryDHIS2(job.data, progressCallback);
 
-                        // Update status to completed and broadcast
                         const completedSchedule =
                             await scheduleService.updateScheduleStatus(
                                 scheduleId,
@@ -76,7 +72,6 @@ export class Scheduler {
 
                         return { success: true, result: "Task completed" };
                     } catch (error) {
-                        // Update status to failed and broadcast
                         const failedSchedule =
                             await scheduleService.updateScheduleStatus(
                                 scheduleId,
@@ -117,8 +112,17 @@ export class Scheduler {
         if (!schedule) {
             throw new Error(`Schedule ${id} not found`);
         }
-        await this.setupJob(schedule);
-        return schedule;
+        
+        // Reset progress to 0 and status when starting/restarting a schedule
+        await scheduleService.updateScheduleProgress(id, 0);
+        await scheduleService.updateScheduleStatus(id, "idle", "Ready to start");
+        const updatedSchedule = await scheduleService.getSchedule(id);
+        
+        // Broadcast progress reset to UI
+        webSocketService.broadcastProgress(id, 0, "Starting job...");
+        
+        await this.setupJob(updatedSchedule!);
+        return updatedSchedule!;
     }
 
     async stopSchedule(id: string) {
