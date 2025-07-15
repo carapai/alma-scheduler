@@ -14,7 +14,7 @@ try {
 }
 
 const server = serve({
-    port: 3003,
+    port: process.env.PORT ? parseInt(process.env.PORT) : 3003,
     websocket: {
         open(ws) {
             webSocketService.addConnection(ws);
