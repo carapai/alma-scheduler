@@ -80,13 +80,9 @@ export function App() {
 
     const scheduleType = Form.useWatch("type", form);
     const periodType = Form.useWatch(["data", "periodType"], form);
-
-    // Use Dexie with useLiveQuery for reactive data
     const dexieSchedules = useLiveQuery(() => scheduleDB.getAllSchedules(), []);
     const { isConnected, lastMessage, connectionError } = useWebSocketDexie("/ws");
-    
-    // Load initial data from server and sync with Dexie
-    useEffect(() => {
+        useEffect(() => {
         const loadInitialData = async () => {
             try {
                 const response = await fetch("/api/schedules");
@@ -224,7 +220,6 @@ export function App() {
             );
             if (response.ok) {
                 const data = await response.json();
-                // Update Dexie directly
                 await scheduleDB.upsertSchedule(data.schedule);
             }
         } catch (error) {
