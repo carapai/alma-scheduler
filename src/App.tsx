@@ -87,7 +87,7 @@ export function App() {
             if (prev) {
                 return {
                     schedules: prev.schedules.map((schedule) =>
-                        schedule.id === id ? { ...schedule, progress } : schedule
+                        schedule.id === id ? { ...schedule, progress, message: message || schedule.message } : schedule
                     ),
                 };
             }
@@ -101,7 +101,21 @@ export function App() {
             if (lastMessage.type === "progress_update" && "id" in lastMessage.data && "progress" in lastMessage.data) {
                 const progressData = lastMessage.data as { id: string; progress: number; message?: string };
                 handleProgressUpdate(progressData.id, progressData.progress, progressData.message);
+            } else if (lastMessage.type === "schedule_update" && "id" in lastMessage.data) {
+                // Handle schedule updates by updating the specific schedule
+                const scheduleData = lastMessage.data as Schedule;
+                queryClient.setQueryData<{ schedules: Schedule[] }>(["schedules"], (prev) => {
+                    if (prev) {
+                        return {
+                            schedules: prev.schedules.map((schedule) =>
+                                schedule.id === scheduleData.id ? { ...schedule, ...scheduleData } : schedule
+                            ),
+                        };
+                    }
+                    return prev;
+                });
             } else {
+                // Only invalidate for other message types (created, deleted, etc.)
                 queryClient.invalidateQueries({ queryKey: ["schedules"] });
             }
         }
