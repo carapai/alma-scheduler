@@ -1,10 +1,9 @@
 import "@/index.css";
-import { JobRequest } from "@/utils";
+import { Schedule } from "@/interfaces";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import type { TableColumnsType } from "antd";
 import {
     Button,
-    DatePicker,
     Flex,
     Form,
     Input,
@@ -14,316 +13,306 @@ import {
     Select,
     Switch,
     Table,
-    Radio,
+    Badge,
+    Tag,
+    DatePicker,
 } from "antd";
-import type { CheckboxGroupProps } from "antd/es/checkbox";
-import {
-    AlertCircle,
-    CheckCircle,
-    Clock,
-    Play,
-    Square,
-    Trash2,
-} from "lucide-react";
-import { useState } from "react";
+import { Play, Square, Trash2, Settings, Wifi, WifiOff } from "lucide-react";
+import React, { useState, useCallback, useEffect } from "react";
 import { v4 as uuidv4 } from "uuid";
-
-import {
-    dayOptions,
-    hourOptions,
-    minuteOptions,
-    monthOptions,
-    weekOptions,
-} from "./common";
 import dayjs from "dayjs";
-import { RecordId } from "surrealdb";
-
-const schedulingOptions: CheckboxGroupProps<string>["options"] = [
-    { value: "current", label: "Current Period" },
-    { value: "previous", label: "Previous Period" },
-];
-// 11e3bbf1-39cc-4864-8384-ea99cbf09077
-
-const getStatusIcon = (status?: string) => {
-    switch (status) {
-        case "running":
-            return <Clock className="w-5 h-5 text-blue-500" />;
-        case "completed":
-            return <CheckCircle className="w-5 h-5 text-green-500" />;
-        case "failed":
-            return <AlertCircle className="w-5 h-5 text-red-500" />;
-        default:
-            return <Clock className="w-5 h-5 text-gray-500" />;
-    }
-};
+import { useWebSocket } from "./useWebSocket";
 
 const getStatusColor = (status?: string) => {
     switch (status) {
         case "running":
-            return "bg-blue-500";
+            return "processing";
         case "completed":
-            return "bg-green-500";
+            return "success";
         case "failed":
-            return "bg-red-500";
+            return "error";
+        case "paused":
+            return "warning";
         default:
-            return "bg-gray-500";
+            return "default";
     }
 };
 
-const defaultJobs: JobRequest = {
-    id: "",
-    jobName: "",
-    data: {
-        periodType: "month",
-        processor: "alma-dhis2",
-    },
-    jobOptions: {},
-    lastRun: "",
-    nextRun: "",
-    progress: "",
-    status: "idle",
+const defaultSchedule: Omit<Schedule, "id" | "createdAt" | "updatedAt"> = {
+    name: "",
+    type: "one-time",
+    cronExpression: "",
     isActive: false,
+    runImmediately: false,
+    lastRun: undefined,
+    nextRun: undefined,
+    progress: 0,
+    status: "idle",
+    retryAttempts: 0,
+    maxRetries: 3,
+    retryDelay: 60,
+    scorecard: 0,
+    message: "",
+    indicatorGroup: "",
+    periodType: "monthly",
+    dhis2Instance: "",
+    almaInstance: "",
+    processor: "dhis2-alma-sync",
+    data: {
+        runFor: "current",
+        periods: [],
+        periodType: "monthly",
+        dhis2Instance: "",
+        almaInstance: "",
+        scorecard: 0,
+        indicatorGroup: "",
+    },
 };
-
-export function createTypedForm() {
-    const [form] = Form.useForm<JobRequest>();
-    const Field = <K extends keyof JobRequest>({
-        name,
-        ...props
-    }: {
-        name: K;
-    } & Omit<React.ComponentProps<typeof Form.Item>, "name">) => (
-        <Form.Item name={name} {...props} />
-    );
-
-    const NestedField = <
-        K1 extends keyof JobRequest,
-        K2 extends keyof NonNullable<JobRequest[K1]>,
-    >({
-        name,
-        ...props
-    }: {
-        name: [K1, K2];
-    } & Omit<React.ComponentProps<typeof Form.Item>, "name">) => (
-        <Form.Item name={name} {...props} />
-    );
-    const DeepField = <
-        K1 extends keyof JobRequest,
-        K2 extends keyof NonNullable<JobRequest[K1]>,
-        K3 extends keyof NonNullable<NonNullable<JobRequest[K1]>[K2]>,
-    >({
-        name,
-        ...props
-    }: {
-        name: [K1, K2, K3];
-    } & Omit<React.ComponentProps<typeof Form.Item>, "name">) => (
-        <Form.Item name={name} {...props} />
-    );
-    return {
-        form,
-        Field,
-        NestedField,
-        DeepField,
-        useWatch: Form.useWatch,
-    };
-}
 
 export function App() {
     const queryClient = useQueryClient();
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isEditing, setIsEditing] = useState<boolean>(false);
-    const [current, setCurrent] = useState<JobRequest>(defaultJobs);
-    const { form, Field, NestedField, DeepField, useWatch } = createTypedForm();
+    const [current, setCurrent] = useState<Schedule>(
+        defaultSchedule as Schedule,
+    );
+    const [form] = Form.useForm<Schedule>();
 
-    const periodType = useWatch(["data", "periodType"], form);
-    const handleStart = async (job: JobRequest) => {
-        try {
-            setIsEditing(true);
-            setCurrent(job);
-            const request = new Request(`/api/jobs/${job.id}/start`, {
-                method: "POST",
-                body: JSON.stringify(job),
+    const scheduleType = Form.useWatch("type", form);
+    const periodType = Form.useWatch(["data", "periodType"], form);
+
+    const handleProgressUpdate = useCallback((id: string, progress: number, message?: string) => {
+        console.log(`Progress update for ${id}: ${progress}% - ${message}`);
+        queryClient.setQueryData<{ schedules: Schedule[] }>(["schedules"], (prev) => {
+            if (prev) {
+                return {
+                    schedules: prev.schedules.map((schedule) =>
+                        schedule.id === id ? { ...schedule, progress } : schedule
+                    ),
+                };
+            }
+            return prev;
+        });
+    }, [queryClient]);
+
+    const { isConnected, lastMessage, connectionError } = useWebSocket("/ws");
+    useEffect(() => {
+        if (lastMessage) {
+            if (lastMessage.type === "progress_update" && "id" in lastMessage.data && "progress" in lastMessage.data) {
+                const progressData = lastMessage.data as { id: string; progress: number; message?: string };
+                handleProgressUpdate(progressData.id, progressData.progress, progressData.message);
+            } else {
+                queryClient.invalidateQueries({ queryKey: ["schedules"] });
+            }
+        }
+    }, [lastMessage, queryClient, handleProgressUpdate]);
+
+    React.useEffect(() => {
+        if (scheduleType !== "recurring") {
+            form.setFieldValue("runImmediately", false);
+            form.setFieldsValue({
+                data: { ...form.getFieldValue("data"), runFor: "current" },
             });
-            fetch(request)
-                .then((response) => {
-                    if (response.ok) {
-                        return response.json();
-                    } else {
-                        throw new Error("Something went wrong on API server!");
-                    }
-                })
-                .then((response) => updateUI(response.job, true))
-                .catch((error) => {
-                    console.error(error);
-                });
-        } catch (err) {}
-    };
-
-    const handleStop = async (job: JobRequest) => {
-        try {
-            setIsEditing(() => true);
-            setCurrent(job);
-            const request = new Request(`/api/jobs/${job.id}/stop`, {
-                method: "POST",
+        } else {
+            form.setFieldsValue({
+                data: { ...form.getFieldValue("data"), periodType: "monthly" },
             });
-            fetch(request)
-                .then((response) => {
-                    if (response.ok) {
-                        return response.json();
-                    } else {
-                        throw new Error("Something went wrong on API server!");
-                    }
-                })
-                .then((response) => updateUI(response.job, true))
-                .catch((error) => {
-                    console.error(error);
-                });
-        } catch (err) {}
-    };
+        }
+    }, [scheduleType, form]);
 
-    const handleDelete = async (job: JobRequest) => {
-        setIsEditing(() => true);
-        setCurrent(job);
-        if (window.confirm("Are you sure you want to delete this job?")) {
-            try {
-                const request = new Request(`/api/jobs/${job.id}`, {
-                    method: "DELETE",
-                });
-                fetch(request)
-                    .then((response) => {
-                        if (response.ok) {
-                            return response.json();
-                        } else {
-                            throw new Error(
-                                "Something went wrong on API server!",
-                            );
-                        }
-                    })
-                    .then((response) => updateUI(response.job, true, true))
-                    .catch((error) => {
-                        console.error(error);
-                    });
-            } catch (err) {}
+    const handleStart = async (schedule: Schedule) => {
+        console.log("Starting schedule:", schedule);
+        try {
+            const response = await fetch(
+                `/api/schedules/${schedule.id}/start`,
+                {
+                    method: "POST",
+                },
+            );
+            if (response.ok) {
+                const data = await response.json();
+                updateUI(data.schedule, true);
+                queryClient.invalidateQueries({ queryKey: ["schedules"] });
+            }
+        } catch (error) {
+            console.error("Failed to start schedule:", error);
         }
     };
 
-    const startEdit = (job: JobRequest) => {
-        setIsEditing(() => true);
-        setCurrent(() => ({
-            ...job,
-            data: {
-                ...job.data,
-                period: job.data.period
-                    ? job.data.period.map((p: string) => dayjs(p))
-                    : undefined,
-            },
-        }));
-        setIsModalOpen(() => true);
+    const handleStop = async (schedule: Schedule) => {
+        try {
+            const response = await fetch(`/api/schedules/${schedule.id}/stop`, {
+                method: "POST",
+            });
+            if (response.ok) {
+                const data = await response.json();
+                updateUI(data.schedule, true);
+                queryClient.invalidateQueries({ queryKey: ["schedules"] });
+            }
+        } catch (error) {
+            console.error("Failed to stop schedule:", error);
+        }
     };
 
-    const columns: TableColumnsType<JobRequest> = [
+    const handleDelete = async (schedule: Schedule) => {
+        if (window.confirm("Are you sure you want to delete this schedule?")) {
+            try {
+                const response = await fetch(`/api/schedules/${schedule.id}`, {
+                    method: "DELETE",
+                });
+                if (response.ok) {
+                    queryClient.invalidateQueries({ queryKey: ["schedules"] });
+                }
+            } catch (error) {
+                console.error("Failed to delete schedule:", error);
+            }
+        }
+    };
+
+    const startEdit = (schedule: Schedule) => {
+        const currentSchedule = {
+            ...schedule,
+            data: {
+                ...schedule.data,
+                periods: (schedule.data.periods || []).map((p: string) =>
+                    dayjs(p),
+                ),
+            },
+        };
+        setIsEditing(true);
+        setCurrent(currentSchedule);
+        form.setFieldsValue(currentSchedule);
+        setIsModalOpen(true);
+    };
+
+    const columns: TableColumnsType<Schedule> = [
         {
-            title: "Id",
-            dataIndex: "id",
+            title: "Name",
+            dataIndex: "name",
+            key: "name",
         },
-        { title: "Job Name", dataIndex: "jobName" },
-        { title: "Cron Expression", dataIndex: "cronExpression" },
+        {
+            title: "Type",
+            dataIndex: "type",
+            key: "type",
+            render: (type) => (
+                <Tag
+                    color={
+                        type === "recurring"
+                            ? "blue"
+                            : type === "immediate"
+                            ? "red"
+                            : "green"
+                    }
+                >
+                    {type}
+                </Tag>
+            ),
+        },
         {
             title: "Status",
             dataIndex: "status",
-            render: (_, row) => {
-                return (
-                    <>
-                        {getStatusIcon(row.status)}
-                        <span>{row.status || "idle"}</span>
-                    </>
-                );
-            },
+            key: "status",
+            render: (status) => (
+                <Badge status={getStatusColor(status)} text={status} />
+            ),
+        },
+        {
+            title: "DHIS2 Instance",
+            dataIndex: ["data", "dhis2Instance"],
+            key: "dhis2Instance",
+            render: (instance) => instance || "N/A",
+        },
+        {
+            title: "Period Type",
+            dataIndex: ["data", "periodType"],
+            key: "periodType",
+            render: (periodType) => (
+                <Tag color="purple">{periodType || "N/A"}</Tag>
+            ),
         },
         {
             title: "Progress",
             dataIndex: "progress",
-            render: (_, row) => {
-                return (
-                    <Progress
-                        percent={Number(row.progress)}
-                        format={(val) => `${val?.toFixed(0)}%`}
-                        strokeColor="green"
-                    />
-                );
-            },
+            key: "progress",
+            render: (progress) => (
+                <Progress percent={Number(progress)} size="small" />
+            ),
         },
         {
             title: "Last Run",
             dataIndex: "lastRun",
+            key: "lastRun",
+            render: (lastRun) =>
+                lastRun
+                    ? dayjs(lastRun).format("YYYY-MM-DD HH:mm:ss")
+                    : "Never",
         },
-
         {
-            title: "Next Run",
-            dataIndex: "nextRun",
-        },
-
-        {
-            title: "Action",
-            key: "action",
-            width: "200px",
-            render: (_, row) => {
-                return (
-                    <Flex gap="10px">
-                        {row.isActive ? (
-                            <button
-                                onClick={() => handleStop(row)}
-                                className="p-1 hover:bg-gray-100 rounded cursor-pointer"
-                                title="Stop"
-                            >
-                                <Square className="w-4 h-4" />
-                            </button>
-                        ) : (
-                            <button
-                                onClick={() => handleStart(row)}
-                                className="p-1 hover:bg-gray-100 rounded cursor-pointer"
-                                title="Start"
-                            >
-                                <Play className="w-4 h-4" />
-                            </button>
-                        )}
-                        <button
-                            onClick={() => startEdit(row)}
-                            className="p-1 hover:bg-gray-100 rounded text-blue-500 cursor-pointer"
-                            title="Edit"
-                        >
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                className="w-4 h-4"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                            >
-                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                            </svg>
-                        </button>
-                        <button
-                            onClick={() => handleDelete(row)}
-                            className="p-1 hover:bg-gray-100 rounded text-red-500 cursor-pointer"
-                            title="Delete"
-                        >
-                            <Trash2 className="w-4 h-4" />
-                        </button>
-                    </Flex>
-                );
+            title: "Schedule",
+            key: "schedule",
+            render: (_, schedule) => {
+                if (schedule.type === "recurring" && schedule.cronExpression) {
+                    return <Tag color="blue">{schedule.cronExpression}</Tag>;
+                } else if (
+                    schedule.data?.periods &&
+                    schedule.data.periods.length > 0
+                ) {
+                    return (
+                        <Tag color="green">
+                            {schedule.data.periods.length} periods
+                        </Tag>
+                    );
+                } else {
+                    return <Tag color="orange">Auto-calculated</Tag>;
+                }
             },
+        },
+        {
+            title: "Actions",
+            key: "actions",
+            render: (_, schedule) => (
+                <Flex gap="8px">
+                    {schedule.status === "running"  ? (
+                        <Button
+                            type="text"
+                            icon={<Square className="w-4 h-4" />}
+                            onClick={() => handleStop(schedule)}
+                            title="Stop"
+                        />
+                    ) : (
+                        <Button
+                            type="text"
+                            icon={<Play className="w-4 h-4" />}
+                            onClick={() => handleStart(schedule)}
+                            title="Start"
+                        />
+                    )}
+                    <Button
+                        type="text"
+                        icon={<Settings className="w-4 h-4" />}
+                        onClick={() => startEdit(schedule)}
+                        title="Edit"
+                    />
+                    <Button
+                        type="text"
+                        danger
+                        icon={<Trash2 className="w-4 h-4" />}
+                        onClick={() => handleDelete(schedule)}
+                        title="Delete"
+                    />
+                </Flex>
+            ),
         },
     ];
 
-    const { isPending, hasErrors, errors, jobs, processors, instances } =
+    const { isPending, hasErrors, errors, schedules, processors, instances } =
         useQueries({
             queries: [
                 {
-                    queryKey: ["jobs"],
-                    queryFn: () => fetch("/api/jobs").then((res) => res.json()),
-                    refetchInterval: 60_000,
+                    queryKey: ["schedules"],
+                    queryFn: () =>
+                        fetch("/api/schedules").then((res) => res.json()),
                 },
                 {
                     queryKey: ["processors"],
@@ -343,7 +332,7 @@ export function App() {
                     .filter((result) => result.isError)
                     .map((result) => result.error);
 
-                let jobs: JobRequest[] = [];
+                let schedules: Schedule[] = [];
                 let processors: string[] = [];
                 let instances: {
                     dhis2Instances: string[];
@@ -354,31 +343,25 @@ export function App() {
                 };
 
                 if (!isPending && !hasErrors) {
-                    const [
-                        {
-                            data: { jobs: currentJobs },
-                        },
-                        {
-                            data: { processors: currentProcessors },
-                        },
-                        {
-                            data: {
-                                dhis2Instances: currentDhis2Instances,
-                                almaInstances: currentAlmaInstances,
-                            },
-                        },
-                    ] = results;
+                    const [schedulesResult, processorsResult, instancesResult] =
+                        results;
 
-                    jobs = currentJobs;
-                    processors = currentProcessors;
-                    instances = {
-                        dhis2Instances: currentDhis2Instances,
-                        almaInstances: currentAlmaInstances,
-                    };
+                    if (schedulesResult.data?.success) {
+                        schedules = schedulesResult.data.schedules;
+                    }
+                    if (processorsResult.data?.success) {
+                        processors = processorsResult.data.processors;
+                    }
+                    if (instancesResult.data?.success) {
+                        instances = {
+                            dhis2Instances: instancesResult.data.dhis2Instances,
+                            almaInstances: instancesResult.data.almaInstances,
+                        };
+                    }
                 }
 
                 return {
-                    jobs,
+                    schedules,
                     processors,
                     instances,
                     isPending,
@@ -390,471 +373,360 @@ export function App() {
 
     const handleCancel = () => {
         setIsModalOpen(false);
+        setIsEditing(false);
+        setCurrent(defaultSchedule as Schedule);
+        form.resetFields();
     };
-    const updateUI = (job: JobRequest, editing: boolean, remove = false) => {
-        queryClient.setQueryData<{ jobs: JobRequest[] }>(["jobs"], (prev) => {
-            if (prev && editing === true) {
-                return {
-                    jobs: prev.jobs.flatMap((s) => {
-                        if (s.id && job && job.id && s.id === job.id) {
-                            if (remove) {
-                                return [];
-                            }
-                            return {
-                                ...s,
-                                ...job,
-                            };
-                        }
-                        return s;
-                    }),
-                };
-            } else if (editing === false) {
-                if (prev) {
+
+    const updateUI = (schedule: Schedule, editing: boolean) => {
+        queryClient.setQueryData<{ schedules: Schedule[] }>(
+            ["schedules"],
+            (prev) => {
+                if (prev && editing) {
                     return {
-                        jobs: prev.jobs.concat(job),
+                        schedules: prev.schedules.map((s) =>
+                            s.id === schedule.id ? schedule : s,
+                        ),
                     };
-                } else {
-                    return { jobs: [job] };
                 }
-            }
-
-            return prev;
-        });
+                return prev;
+            },
+        );
     };
 
-    const onCreate = (values: JobRequest) => {
-        let request = new Request("/api/jobs", {
-            method: "POST",
-            body: JSON.stringify(values),
-        });
-        if (isEditing) {
-            request = new Request(`/api/jobs/${current.id}`, {
-                method: "PUT",
+    const onCreate = async (values: Schedule) => {
+        try {
+            const url = isEditing
+                ? `/api/schedules/${current.id}`
+                : "/api/schedules";
+            const method = isEditing ? "PUT" : "POST";
+
+            const response = await fetch(url, {
+                method,
+                headers: {
+                    "Content-Type": "application/json",
+                },
                 body: JSON.stringify(values),
             });
+
+            if (response.ok) {
+                queryClient.invalidateQueries({ queryKey: ["schedules"] });
+                setIsModalOpen(false);
+                setIsEditing(false);
+                setCurrent(defaultSchedule as Schedule);
+                form.resetFields();
+            }
+        } catch (error) {
+            console.error("Failed to save schedule:", error);
         }
-        fetch(request)
-            .then((response) => {
-                if (response.ok) {
-                    return response.json();
-                } else {
-                    throw new Error("Something went wrong on API server!");
-                }
-            })
-            .then((response) => updateUI(response.job, isEditing))
-            .catch((error) => {
-                console.error(error);
-            });
-        setIsModalOpen(() => false);
-        setCurrent(() => defaultJobs);
     };
 
-    if (isPending) return "Loading...";
+    if (isPending) return <div>Loading...</div>;
 
-    if (hasErrors)
+    if (hasErrors) {
         return (
-            "An error has occurred: " + errors.map((e) => e.message).join(", ")
+            <div>
+                An error has occurred: {errors.map((e) => e.message).join(", ")}
+            </div>
         );
+    }
+
     return (
         <Flex
             className="h-screen w-screen"
             vertical
-            gap="10px"
-            style={{ padding: "10px", backgroundColor: "whitesmoke" }}
+            gap="16px"
+            style={{ padding: "16px", backgroundColor: "#f5f5f5" }}
         >
-            <Flex justify="flex-end">
+            <Flex justify="space-between" align="center">
+                <Flex align="center" gap="16px">
+                    <h1 style={{ margin: 0 }}>Schedule Management</h1>
+                    <Badge
+                        status={isConnected ? "success" : "error"}
+                        text={
+                            <Flex align="center" gap="4px">
+                                {isConnected ? (
+                                    <Wifi className="w-4 h-4" />
+                                ) : (
+                                    <WifiOff className="w-4 h-4" />
+                                )}
+                                <span>
+                                    {isConnected
+                                        ? "Connected"
+                                        : connectionError || "Disconnected"}
+                                </span>
+                            </Flex>
+                        }
+                    />
+                </Flex>
                 <Button
                     type="primary"
                     onClick={() => {
-                        setCurrent(() => ({
-                            ...defaultJobs,
+                        setCurrent({
+                            ...defaultSchedule,
                             id: uuidv4(),
-                        }));
+                        } as Schedule);
                         setIsEditing(false);
+                        form.resetFields();
                         setIsModalOpen(true);
                     }}
                 >
-                    Add job
+                    Create Schedule
                 </Button>
             </Flex>
+
+            <Table
+                columns={columns}
+                dataSource={schedules}
+                rowKey="id"
+                pagination={{ pageSize: 10 }}
+                expandable={{
+                    expandedRowRender: (record) => (
+                        <pre style={{ fontSize: "12px", margin: 0 }}>
+                            {JSON.stringify(record, null, 2)}
+                        </pre>
+                    ),
+                }}
+            />
+
             <Modal
-                title="Job Configuration"
+                title={isEditing ? "Edit Schedule" : "Create Schedule"}
                 open={isModalOpen}
-                okButtonProps={{ autoFocus: true, htmlType: "submit" }}
                 onCancel={handleCancel}
-                width="75%"
-                modalRender={(dom) => (
-                    <Form
-                        layout="vertical"
-                        form={form}
-                        name="form_in_modal"
-                        clearOnDestroy
-                        onFinish={(values) => onCreate(values)}
-                        initialValues={current}
+                footer={[
+                    <Button key="cancel" onClick={handleCancel}>
+                        Cancel
+                    </Button>,
+                    <Button
+                        key="submit"
+                        type="primary"
+                        onClick={() => form.submit()}
                     >
-                        {dom}
-                    </Form>
-                )}
+                        {isEditing ? "Update" : "Create"}
+                    </Button>,
+                ]}
+                width="80%"
             >
-                <Flex justify="space-between" gap="20px">
-                    <Flex vertical flex={1}>
-                        <Field
-                            children={<Input disabled />}
-                            name="id"
-                            label="Job ID"
-                            rules={[{ required: true }]}
-                        />
-                        <Field
-                            children={<Input />}
-                            name="jobName"
-                            label="Job Name"
-                            rules={[{ required: true }]}
-                        />
-                        <NestedField
-                            children={
+                <Form
+                    form={form}
+                    layout="vertical"
+                    onFinish={onCreate}
+                    initialValues={current}
+                >
+                    <Flex gap="24px">
+                        <Flex vertical flex={1}>
+                            <Form.Item name="id" label="Schedule ID">
+                                <Input disabled />
+                            </Form.Item>
+                            <Form.Item
+                                name="name"
+                                label="Schedule Name"
+                                rules={[{ required: true }]}
+                            >
+                                <Input />
+                            </Form.Item>
+                            <Form.Item
+                                name="type"
+                                label="Schedule Type"
+                                rules={[{ required: true }]}
+                            >
+                                <Select
+                                    options={[
+                                        {
+                                            label: "One-time",
+                                            value: "one-time",
+                                        },
+                                        {
+                                            label: "Recurring",
+                                            value: "recurring",
+                                        },
+                                        {
+                                            label: "Immediate",
+                                            value: "immediate",
+                                        },
+                                    ]}
+                                />
+                            </Form.Item>
+                            {scheduleType === "recurring" && (
+                                <Form.Item
+                                    name="runImmediately"
+                                    label="Run Immediately"
+                                    valuePropName="checked"
+                                    tooltip="Run once immediately when schedule is created, then continue on cron schedule"
+                                >
+                                    <Switch />
+                                </Form.Item>
+                            )}
+                            {scheduleType === "recurring" && (
+                                <Form.Item
+                                    name="cronExpression"
+                                    label="Cron Expression"
+                                    rules={[{ required: true }]}
+                                >
+                                    <Input placeholder="0 0 * * *" />
+                                </Form.Item>
+                            )}
+                            <Form.Item
+                                name="processor"
+                                label="Processor"
+                                rules={[{ required: true }]}
+                            >
                                 <Select
                                     options={processors.map((p) => ({
                                         label: p,
                                         value: p,
                                     }))}
                                 />
-                            }
-                            label="Processor"
-                            name={["data", "processor"]}
-                            rules={[{ required: true }]}
-                        />
-                        <NestedField
-                            children={
+                            </Form.Item>
+                        </Flex>
+                        <Flex vertical flex={1}>
+                            <Form.Item
+                                name={["data", "dhis2Instance"]}
+                                label="DHIS2 Instance"
+                                rules={[{ required: true }]}
+                            >
                                 <Select
                                     options={instances.dhis2Instances.map(
-                                        (p) => ({
-                                            label: p,
-                                            value: p,
+                                        (i) => ({
+                                            label: i,
+                                            value: i,
                                         }),
                                     )}
                                 />
-                            }
-                            label="DHIS2 Instance"
-                            name={["data", "dhis2Instance"]}
-                            rules={[{ required: true }]}
-                        />
-                        <NestedField
-                            children={
+                            </Form.Item>
+                            <Form.Item
+                                name={["data", "almaInstance"]}
+                                label="ALMA Instance"
+                                rules={[{ required: true }]}
+                            >
                                 <Select
                                     options={instances.almaInstances.map(
-                                        (p) => ({
-                                            label: p,
-                                            value: p,
+                                        (i) => ({
+                                            label: i,
+                                            value: i,
                                         }),
                                     )}
                                 />
-                            }
-                            label="Alma Instance"
-                            name={["data", "almaInstance"]}
-                            rules={[{ required: true }]}
-                        />
-                        <NestedField
-                            children={<InputNumber style={{ width: "100%" }} />}
-                            label="Scorecard"
-                            name={["data", "scorecard"]}
-                            rules={[{ required: true }]}
-                        />
-
-                        <NestedField
-                            children={
-                                <Select
-                                    options={[
+                            </Form.Item>
+                            <Form.Item
+                                name={["data", "scorecard"]}
+                                label="Scorecard"
+                                rules={[{ required: true }]}
+                            >
+                                <InputNumber style={{ width: "100%" }} />
+                            </Form.Item>
+                            <Form.Item
+                                name={["data", "indicatorGroup"]}
+                                label="Indicator Group"
+                                rules={[{ required: true }]}
+                            >
+                                <Input />
+                            </Form.Item>
+                            {scheduleType !== "recurring" && (
+                                <Form.Item
+                                    name={["data", "periodType"]}
+                                    label="Period Type"
+                                    rules={[{ required: true }]}
+                                    tooltip="For non-recurring schedules: choose the type of periods to select"
+                                >
+                                    <Select
+                                        options={[
+                                            { label: "Daily", value: "day" },
+                                            { label: "Weekly", value: "week" },
+                                            {
+                                                label: "Monthly",
+                                                value: "monthly",
+                                            },
+                                            {
+                                                label: "Quarterly",
+                                                value: "quarterly",
+                                            },
+                                            { label: "Yearly", value: "year" },
+                                        ]}
+                                    />
+                                </Form.Item>
+                            )}
+                            {scheduleType !== "recurring" && periodType && (
+                                <Form.Item
+                                    name={["data", "periods"]}
+                                    label={`Select ${
+                                        periodType === "day"
+                                            ? "Dates"
+                                            : periodType === "week"
+                                            ? "Weeks"
+                                            : periodType === "monthly"
+                                            ? "Months"
+                                            : periodType === "quarterly"
+                                            ? "Quarters"
+                                            : "Years"
+                                    }`}
+                                    rules={[
                                         {
-                                            label: "Daily",
-                                            value: "day",
-                                        },
-                                        {
-                                            label: "Weekly",
-                                            value: "week",
-                                        },
-                                        {
-                                            label: "Monthly",
-                                            value: "month",
-                                        },
-                                        {
-                                            label: "Quarterly",
-                                            value: "quarter",
-                                        },
-                                        {
-                                            label: "Yearly",
-                                            value: "year",
+                                            required: true,
+                                            message:
+                                                "Please select at least one period",
                                         },
                                     ]}
-                                />
-                            }
-                            label="Period Type"
-                            name={["data", "periodType"]}
-                            rules={[{ required: true }]}
-                        />
-                        <NestedField
-                            children={
-                                <DatePicker
-                                    picker={periodType}
+                                >
+                                    <DatePicker
+                                        multiple
+                                        picker={
+                                            periodType === "day"
+                                                ? "date"
+                                                : periodType === "week"
+                                                ? "week"
+                                                : periodType === "monthly"
+                                                ? "month"
+                                                : periodType === "quarterly"
+                                                ? "quarter"
+                                                : "year"
+                                        }
+                                        style={{ width: "100%" }}
+                                        placeholder={`Select ${
+                                            periodType === "day"
+                                                ? "Dates"
+                                                : periodType === "week"
+                                                ? "Weeks"
+                                                : periodType === "monthly"
+                                                ? "Months"
+                                                : periodType === "quarterly"
+                                                ? "Quarters"
+                                                : "Years"
+                                        }`}
+                                    />
+                                </Form.Item>
+                            )}
+                            {scheduleType === "recurring" && (
+                                <Form.Item
+                                    name={["data", "runFor"]}
+                                    label="Run For"
+                                    rules={[{ required: true }]}
+                                    tooltip="For recurring schedules: choose whether to process current or previous period on each run"
+                                >
+                                    <Select
+                                        options={[
+                                            {
+                                                label: "Current Period",
+                                                value: "current",
+                                            },
+                                            {
+                                                label: "Previous Period",
+                                                value: "previous",
+                                            },
+                                        ]}
+                                    />
+                                </Form.Item>
+                            )}
+                            <Form.Item name="maxRetries" label="Max Retries">
+                                <InputNumber
                                     style={{ width: "100%" }}
-                                    multiple
+                                    min={0}
                                 />
-                            }
-                            label="Specific Period"
-                            name={["data", "period"]}
-                            dependencies={["data", "periodType"]}
-                        />
-                        <NestedField
-                            children={<Input />}
-                            label="Indicator Group"
-                            name={["data", "indicatorGroup"]}
-                            rules={[{ required: true }]}
-                        />
+                            </Form.Item>
+                        </Flex>
                     </Flex>
-
-                    <Flex vertical flex={1}>
-                        <NestedField
-                            name={["data", "scheduled"]}
-                            label="Schedule"
-                            children={<Switch />}
-                            valuePropName="checked"
-                        />
-                        <Form.Item
-                            noStyle
-                            shouldUpdate={(prevValues, currentValues) =>
-                                prevValues.data.scheduled !==
-                                currentValues.data.scheduled
-                            }
-                        >
-                            {({ getFieldValue }) =>
-                                getFieldValue(["data", "scheduled"]) ? (
-                                    <>
-                                        <Form.Item
-                                            label="Cron Expression"
-                                            rules={[{ required: true }]}
-                                            children={
-                                                <Flex justify="space-between">
-                                                    <DeepField
-                                                        children={
-                                                            <Select
-                                                                maxTagCount={1}
-                                                                mode="multiple"
-                                                                options={
-                                                                    minuteOptions
-                                                                }
-                                                            />
-                                                        }
-                                                        name={[
-                                                            "data",
-                                                            "schedule",
-                                                            "minutes",
-                                                        ]}
-                                                        label="Minute"
-                                                        style={{
-                                                            width: "100%",
-                                                        }}
-                                                        rules={[
-                                                            { required: true },
-                                                        ]}
-                                                    />
-                                                    <DeepField
-                                                        children={
-                                                            <Select
-                                                                maxTagCount={1}
-                                                                mode="multiple"
-                                                                options={
-                                                                    hourOptions
-                                                                }
-                                                            />
-                                                        }
-                                                        name={[
-                                                            "data",
-                                                            "schedule",
-                                                            "hours",
-                                                        ]}
-                                                        label="Hour"
-                                                        style={{
-                                                            width: "100%",
-                                                        }}
-                                                        rules={[
-                                                            { required: true },
-                                                        ]}
-                                                    />
-
-                                                    <DeepField
-                                                        children={
-                                                            <Select
-                                                                maxTagCount={1}
-                                                                mode="multiple"
-                                                                options={
-                                                                    dayOptions
-                                                                }
-                                                            />
-                                                        }
-                                                        name={[
-                                                            "data",
-                                                            "schedule",
-                                                            "days",
-                                                        ]}
-                                                        label="Day of Month"
-                                                        style={{
-                                                            width: "100%",
-                                                        }}
-                                                        rules={[
-                                                            { required: true },
-                                                        ]}
-                                                    />
-
-                                                    <DeepField
-                                                        children={
-                                                            <Select
-                                                                maxTagCount={1}
-                                                                mode="multiple"
-                                                                options={
-                                                                    monthOptions
-                                                                }
-                                                            />
-                                                        }
-                                                        name={[
-                                                            "data",
-                                                            "schedule",
-                                                            "months",
-                                                        ]}
-                                                        label="Month"
-                                                        style={{
-                                                            width: "100%",
-                                                        }}
-                                                        rules={[
-                                                            { required: true },
-                                                        ]}
-                                                    />
-
-                                                    <DeepField
-                                                        children={
-                                                            <Select
-                                                                maxTagCount={1}
-                                                                mode="multiple"
-                                                                options={
-                                                                    weekOptions
-                                                                }
-                                                            />
-                                                        }
-                                                        name={[
-                                                            "data",
-                                                            "schedule",
-                                                            "daysOfWeek",
-                                                        ]}
-                                                        label="Day of Week"
-                                                        style={{
-                                                            width: "100%",
-                                                        }}
-                                                        rules={[
-                                                            { required: true },
-                                                        ]}
-                                                    />
-                                                </Flex>
-                                            }
-                                        />
-
-                                        <NestedField
-                                            name={["data", "runFor"]}
-                                            children={
-                                                <Radio.Group
-                                                    options={schedulingOptions}
-                                                />
-                                            }
-                                            label="Run Schedule For"
-                                            rules={[
-                                                {
-                                                    required: true,
-                                                },
-                                            ]}
-                                        />
-                                        <DeepField
-                                            name={[
-                                                "jobOptions",
-                                                "repeat",
-                                                "immediately",
-                                            ]}
-                                            label="Run Immediately"
-                                            children={<Switch />}
-                                            valuePropName="checked"
-                                        />
-                                        <Form.Item
-                                            noStyle
-                                            shouldUpdate={(
-                                                prevValues,
-                                                currentValues,
-                                            ) =>
-                                                prevValues.jobOptions?.repeat
-                                                    ?.immediately !==
-                                                currentValues.jobOptions?.repeat
-                                                    ?.immediately
-                                            }
-                                        >
-                                            {({ getFieldValue }) =>
-                                                !getFieldValue([
-                                                    "jobOptions",
-                                                    "repeat",
-                                                    "immediately",
-                                                ]) ? (
-                                                    <>
-                                                        <DeepField
-                                                            name={[
-                                                                "jobOptions",
-                                                                "repeat",
-                                                                "startDate",
-                                                            ]}
-                                                            label="Start Running on"
-                                                            children={
-                                                                <DatePicker
-                                                                    style={{
-                                                                        width: "100%",
-                                                                    }}
-                                                                />
-                                                            }
-                                                            rules={[
-                                                                {
-                                                                    required:
-                                                                        true,
-                                                                },
-                                                            ]}
-                                                        />
-                                                        <DeepField
-                                                            name={[
-                                                                "jobOptions",
-                                                                "repeat",
-                                                                "endDate",
-                                                            ]}
-                                                            label="Stop Running on"
-                                                            children={
-                                                                <DatePicker
-                                                                    style={{
-                                                                        width: "100%",
-                                                                    }}
-                                                                />
-                                                            }
-                                                        />
-                                                    </>
-                                                ) : null
-                                            }
-                                        </Form.Item>
-                                    </>
-                                ) : null
-                            }
-                        </Form.Item>
-                    </Flex>
-                </Flex>
+                </Form>
             </Modal>
-            <Table
-                columns={columns}
-                dataSource={jobs}
-                rowKey="id"
-                expandable={{
-                    expandedRowRender: (record) => (
-                        <pre>{JSON.stringify(record, null, 2)}</pre>
-                    ),
-                }}
-            />
         </Flex>
     );
 }

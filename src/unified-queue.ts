@@ -1,10 +1,7 @@
-import { Queue, Worker, Job, JobsOptions, JobType, JobProgress } from "bullmq";
+import { Job, JobProgress, JobsOptions, JobType, Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
-import { isEmpty } from "lodash";
-import { v4 as uuidv4 } from "uuid";
 import { JobRequest } from "./utils";
 
-// Redis connection configuration
 const redisConfig = {
     host: process.env.REDIS_HOST || "127.0.0.1",
     port: parseInt(process.env.REDIS_PORT || "6379"),
@@ -12,10 +9,6 @@ const redisConfig = {
     password: process.env.REDIS_PASSWORD,
     maxRetriesPerRequest: null,
 };
-
-/**
- * Unified Queue System that combines both immediate and scheduled job processing
- */
 export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
     private queue: Queue<JobData, JobDataResult>;
     private worker?: Worker<JobData, JobDataResult>;
@@ -39,14 +32,13 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
                 attempts: 3,
                 backoff: {
                     type: "exponential",
-                    delay: 1000,
+                    delay: 0,
                 },
-                removeOnComplete: 100,
-                removeOnFail: 100,
+                removeOnComplete: true,
+                removeOnFail: true,
                 ...defaultJobOptions,
             },
         });
-        console.log(`Queue '${queueName}' initialized`);
     }
 
     /**
@@ -57,32 +49,13 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
      * @param options Job options including scheduling
      * @returns The created job
      */
-    async addJob({ jobOptions = {}, jobName, data, id, ...rest }: JobRequest) {
-        const jobId = id;
-        console.log(`Adding job '${jobName}' with jobOptions:`, jobOptions);
-        if (
-            data["schedule"] &&
-            jobOptions.repeat &&
-            !isEmpty(data["schedule"])
-        ) {
-            jobOptions.repeat.pattern = [
-                data["schedule"]["minutes"],
-                data["schedule"]["hours"],
-                data["schedule"]["days"],
-                data["schedule"]["months"],
-                data["schedule"]["daysOfWeek"],
-            ]
-                .flat()
-                .join(" ");
-        }
-
-        const job = await this.queue.add(jobName as any, data as any, {
-            ...jobOptions,
-            jobId,
-            removeOnComplete: true,
-            removeOnFail: true,
-        });
-        console.log(job.asJSON());
+    async addJob({ jobOptions = {}, jobName, data }: JobRequest) {
+        const job = await this.queue.add(
+            jobName as any,
+            data as any,
+            jobOptions,
+        );
+				console.log(`Added job ${job.id} to queue ${this.queueName}`);
         return job;
     }
 
@@ -99,7 +72,6 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
         ) => Promise<JobDataResult>,
     ): void {
         this.processorMap.set(jobName, processor);
-        console.log(`Registered processor for job type '${jobName}'`);
     }
 
     /**
@@ -111,17 +83,14 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
     startProcessing(
         concurrency: number = 1,
     ): Worker<JobData, JobDataResult, string> {
-        // Don't create a new worker if one exists
         if (this.worker) {
-            console.log("Worker already running");
             return this.worker;
         }
         const mainProcessor = async (
             job: Job<JobData, JobDataResult, string>,
         ) => {
             try {
-                console.log(`Processing job ${job.id} of type '${job.name}'`);
-                const processor = this.processorMap.get(job.data.processor);
+                const processor = this.processorMap.get(job.name);
                 if (!processor) {
                     throw new Error(
                         `No processor registered for job type '${job.name}'`,
@@ -130,15 +99,10 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
 
                 return await processor(job);
             } catch (error) {
-                console.error(`Error processing job ${job.id}:`, error);
-                throw error; // Re-throw for BullMQ retry handling
+                throw error;
             }
         };
-
-        // Create Redis connection
         const connection = new IORedis(redisConfig);
-
-        // Create worker
         this.worker = new Worker<JobData, JobDataResult, string>(
             this.queueName,
             mainProcessor,
@@ -148,23 +112,17 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
                 autorun: true,
             },
         );
+        this.worker.on("completed", (job, result) => {});
 
-        // Set up event handlers
-        this.worker.on("completed", (job, result) => {
-            console.log(`Job ${job.id} completed with result:`, result);
-        });
+        this.worker.on("failed", (job, error) => {});
 
-        this.worker.on("failed", (job, error) => {
-            console.error(`Job ${job?.id} failed with error:`, error);
-        });
+        this.worker.on("error", (error) => {});
 
-        this.worker.on("error", (error) => {
-            console.error(`Worker error:`, error);
-        });
+        this.worker.on("active", (job) => {});
 
-        console.log(
-            `Started worker for queue '${this.queueName}' with concurrency ${concurrency}`,
-        );
+        this.worker.on("ready", () => {});
+
+        this.worker.on("stalled", (jobId) => {});
         return this.worker;
     }
 
@@ -175,7 +133,6 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
         if (this.worker) {
             await this.worker.close();
             this.worker = undefined;
-            console.log(`Stopped worker for queue '${this.queueName}'`);
         }
     }
 
@@ -187,20 +144,15 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
      */
     async cancelJob(jobId: string): Promise<boolean> {
         const job = await this.queue.getJob(jobId);
-				console.log(job);
         if (!job) {
             return false;
         }
 
-        // For recurring jobs, remove the repeat pattern
         const repeatJobKey = job.repeatJobKey;
         if (repeatJobKey) {
             await this.queue.removeJobScheduler(repeatJobKey);
         }
-
-        // Remove the job
         await job.remove();
-        console.log(`Canceled job ${jobId}`);
         return true;
     }
 
@@ -272,7 +224,6 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
             );
             return updatedJob;
         } catch (error) {
-            console.error(`Error updating repeatable job ${jobId}:`, error);
             throw error;
         }
     }
@@ -282,7 +233,6 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
      */
     async pause() {
         await this.queue.pause();
-        console.log(`Paused queue '${this.queueName}'`);
     }
 
     /**
@@ -290,7 +240,6 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
      */
     async resume() {
         await this.queue.resume();
-        console.log(`Resumed queue '${this.queueName}'`);
     }
 
     /**
@@ -301,7 +250,6 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
             await this.worker.close();
         }
         await this.queue.close();
-        console.log(`Closed queue '${this.queueName}' and worker connections`);
     }
 
     /**
@@ -311,16 +259,12 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
      */
     async pauseRepeatableJob(repeatJobKey: string): Promise<boolean> {
         try {
-            // First, find the repeatable job
             const repeatableJobs = await this.queue.getJobSchedulers();
             const jobToPause = repeatableJobs.find(
                 (job) => job.key === repeatJobKey,
             );
 
             if (!jobToPause) {
-                console.error(
-                    `Repeatable job with key ${repeatJobKey} not found`,
-                );
                 return false;
             }
 
@@ -340,13 +284,8 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
             // Store the paused job configuration in Redis for later resuming
             // Using the queue connection to store metadata
 
-            console.log(`Paused repeatable job ${repeatJobKey}`);
             return true;
         } catch (error) {
-            console.error(
-                `Error pausing repeatable job ${repeatJobKey}:`,
-                error,
-            );
             return false;
         }
     }
@@ -356,32 +295,19 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
      * @param repeatJobKey The repeat key of the job
      * @returns Success status
      */
-    async resumeRepeatableJob(repeatJobKey: string): Promise<boolean> {
+    async resumeRepeatableJob(repeatJobKey: string) {
         try {
-            // Get the paused job configuration from Redis
             const connection = await this.queue.client;
             const pausedJobJSON = await connection.get(
                 `paused:${repeatJobKey}`,
             );
-
             if (!pausedJobJSON) {
-                console.error(`No paused job found with key ${repeatJobKey}`);
                 return false;
             }
-            // Parse the stored job configuration
             const pausedJob = JSON.parse(pausedJobJSON);
-            // Add the job back with its original configuration
             await this.addJob(pausedJob);
-            // Remove the paused job metadata
-            await connection.del(`paused:${repeatJobKey}`);
-
-            console.log(`Resumed repeatable job ${repeatJobKey}`);
-            return true;
+            return await connection.del(`paused:${repeatJobKey}`);
         } catch (error) {
-            console.error(
-                `Error resuming repeatable job ${repeatJobKey}:`,
-                error,
-            );
             return false;
         }
     }
@@ -400,16 +326,13 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
             const job = await this.queue.getJob(jobId);
 
             if (!job) {
-                console.error(`Job ${jobId} not found`);
                 return false;
             }
 
             // Update job progress
             await job.updateProgress(progress);
-            console.log(`Updated progress for job ${jobId}:`, progress);
             return true;
         } catch (error) {
-            console.error(`Error updating progress for job ${jobId}:`, error);
             return false;
         }
     }
@@ -424,13 +347,11 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
             const job = await this.queue.getJob(jobId);
 
             if (!job) {
-                console.error(`Job ${jobId} not found`);
                 return null;
             }
 
             return job.progress;
         } catch (error) {
-            console.error(`Error getting progress for job ${jobId}:`, error);
             return null;
         }
     }
@@ -447,28 +368,18 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
         ) => Promise<R>,
     ): (job: Job<T>) => Promise<R> {
         return async (job: Job<T>) => {
-            // Create a progress update helper
             const updateProgress = async (progress: JobProgress) => {
                 await job.updateProgress(progress);
             };
-            // Set initial progress
             await updateProgress(0);
             try {
-                // Run the processor with progress tracking
                 const result = await processor(job, updateProgress);
-                // Set final progress if not already at 100
                 if (job.progress !== 100) {
                     await updateProgress(100);
                 }
-
                 return result;
             } catch (error) {
-                // Log progress error
-                console.error(
-                    `Error in job ${job.id} with progress tracking:`,
-                    error,
-                );
-                throw error; // Re-throw for BullMQ retry handling
+                throw error;
             }
         };
     }

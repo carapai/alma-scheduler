@@ -3,7 +3,6 @@ import { JobProgress, JobsOptions } from "bullmq";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import quarterOfYear from "dayjs/plugin/quarterOfYear";
-import { RecordId } from "surrealdb";
 
 dayjs.extend(quarterOfYear);
 dayjs.extend(advancedFormat);
@@ -21,15 +20,16 @@ const {
 } = await file.json();
 
 export type JobRequest = {
-    id: string;
+    id?: string;
     jobName: string;
     data: Record<string, any>;
-    lastRun: string;
-    nextRun: string;
-    progress: string;
     jobOptions: JobsOptions;
-    status: string;
-    isActive: boolean;
+    lastRun?: string;
+    nextRun?: string;
+    progress?: string;
+    status?: string;
+    isActive?: boolean;
+    cronExpression?: string;
 };
 
 export async function downloadCSV({
@@ -70,7 +70,6 @@ export async function downloadCSV({
             name,
             almaInstance,
         });
-        console.log(response);
     } catch (error) {
         console.log(error);
     }
@@ -127,17 +126,16 @@ export const queryDHIS2 = async (
     data: Record<string, any>,
     updateProgress: (progress: JobProgress) => Promise<void>,
 ) => {
-    console.log(data);
     const {
         scorecard,
         periodType,
         indicatorGroup,
         period,
         dhis2Instance,
-        almaInstance,
-        scheduled,
         runFor,
+				almaInstance
     } = data;
+		console.log("queryDHIS2", data);
     if (!dhisInstances[dhis2Instance]) {
         throw new Error(`No dhis2 instance found for ${dhis2Instance}`);
     }
@@ -165,7 +163,7 @@ export const queryDHIS2 = async (
         dayjs().subtract(valueToSubtract, unit).format(format),
     ];
 
-    if (!scheduled && period && periodType) {
+    if (period && period.length > 0 && periodType) {
         availablePeriod = period.map((p: any) => dayjs(p).format(format));
     }
     if (scorecard) {
@@ -186,16 +184,19 @@ export const queryDHIS2 = async (
                 fields: "id,name,numerator,denominator,decimals,indicatorType[id,name],annualized",
             },
         });
-
-        const totalIterations = 1 * indicators.length * availablePeriod.length;
-
-        console.log(availablePeriod);
-
+        const totalIterations = 6 * indicators.length * availablePeriod.length;
         let count = 0;
         for (const p of availablePeriod) {
-            for (let level = 1; level <= 1; level++) {
+            for (let level = 1; level <= 6; level++) {
                 for (const [index, x] of indicators.entries()) {
                     count++;
+                    console.log(
+                        `Processing ${
+                            x.name
+                        } for period ${p} at level ${level} (${index + 1}/${
+                            indicators.length
+                        })`,
+                    );
                     await downloadCSV({
                         indicator: x.id,
                         indicatorName: x.name,
@@ -208,11 +209,12 @@ export const queryDHIS2 = async (
                         almaInstance,
                     });
                     const progress = (count / totalIterations) * 100;
-                    updateProgress(progress);
+                    console.log(`Progress: ${progress.toFixed(2)}%`);
+                    await updateProgress(progress);
                 }
             }
         }
 
-        const endTime = new Date().toISOString();
+        console.log("Job completed at:", new Date().toISOString());
     }
 };

@@ -1,54 +1,48 @@
-import { UnifiedQueue } from "@/unified-queue";
-import { JobRequest, queryDHIS2 } from "@/utils";
+import { scheduler } from "@/scheduler";
+import { Schedule } from "@/interfaces";
 import { serve } from "bun";
-import { RecordId, Surreal } from "surrealdb";
-import { surrealdbNodeEngines } from "@surrealdb/node";
 import index from "./index.html";
+import { webSocketService } from "./websocket-service";
 
-const jobQueue = new UnifiedQueue<Record<string, any>, Record<string, any>>(
-    "api-jobs",
-    {},
-);
-jobQueue.registerProcessor(
-    "alma-dhis2",
-    jobQueue.createProgressTrackingProcessor(async (job, updateProgress) => {
-        const jobData = job.data;
-        await queryDHIS2(jobData, updateProgress);
-				console.log(job.id);
-        
-				await db.connect("surrealkv://scheduler", {
-            database: "scheduler",
-            namespace: "scheduler",
-        });
+// Initialize scheduler
+try {
+    await scheduler.initialize();
+    console.log("✅ Scheduler initialized successfully");
+} catch (error) {
+    console.error("❌ Failed to initialize scheduler:", error);
+    process.exit(1);
+}
 
-
-        // const jobRequest = await db.select<JobRequest>(
-        //     new RecordId("jobs", req.params.id),
-        // );
-
-        // const updatedJob = {
-        //     ...jobRequest,
-        //     isActive: false,
-        //     status: "running",
-        // };
-        return { success: true, result: "Task completed" };
-    }),
-);
-jobQueue.startProcessing(4);
-
-const db = new Surreal({
-    engines: surrealdbNodeEngines(),
-});
 const server = serve({
     port: 3003,
+    websocket: {
+        open(ws) {
+            webSocketService.addConnection(ws);
+        },
+        close(ws) {
+            webSocketService.removeConnection(ws);
+        },
+        message(_ws, message) {
+            console.log("Received WebSocket message:", message);
+        },
+    },
     routes: {
+        "/ws": {
+            async GET(req) {
+                const success = server.upgrade(req);
+                if (!success) {
+                    return new Response("Expected websocket", { status: 400 });
+                }
+                return undefined;
+            },
+        },
         "/*": index,
         "/api/processors": {
             async GET() {
                 return Response.json(
                     {
                         success: true,
-                        processors: jobQueue.getProcessors(),
+                        processors: ["dhis2-alma-sync"],
                     },
                     { status: 200 },
                 );
@@ -80,36 +74,15 @@ const server = serve({
                 );
             },
         },
-        "/api/jobs": {
+        "/api/schedules": {
             async GET() {
                 try {
-                    await db.connect("surrealkv://scheduler", {
-                        database: "scheduler",
-                        namespace: "scheduler",
-                    });
-                    const [jobs] = await db.query<[JobRequest[]]>(
-                        "select * from jobs",
-                    );
-                    const realJobs = await jobQueue.getJobs();
-                    const fullJobs = jobs.map((job) => {
-                        const id = job.id as unknown as RecordId;
-                        const currentJob = realJobs.find(
-                            (j) => j?.id === id.id,
-                        );
-                        let updatedJob = {
-                            ...job,
-                            id: id.id,
-                        };
-                        if (currentJob) {
-                            updatedJob.progress = String(currentJob.progress);
-                        }
-                        return updatedJob;
-                    });
+                    const schedules = await scheduler.getAllSchedules();
                     return Response.json(
                         {
                             success: true,
-                            count: jobs.length,
-                            jobs: fullJobs,
+                            count: schedules.length,
+                            schedules,
                         },
                         { status: 200 },
                     );
@@ -124,31 +97,27 @@ const server = serve({
                         },
                         { status: 500 },
                     );
-                } finally {
-                    await db.close();
                 }
             },
-            async POST(req: {
-                json: () => JobRequest | PromiseLike<JobRequest>;
-            }) {
+            async POST(req: { json: () => Schedule | PromiseLike<Schedule> }) {
                 try {
-                    await db.connect("surrealkv://scheduler", {
-                        database: "scheduler",
-                        namespace: "scheduler",
-                    });
-                    const jobRequest = await req.json();
-                    const [job] = await db.insert<JobRequest>(
-                        "jobs",
-                        jobRequest,
+                    const scheduleData = await req.json();
+                    const schedule = await scheduler.createSchedule(
+                        scheduleData,
                     );
+
+                    // Broadcast the new schedule
+                    webSocketService.broadcastScheduleCreated(schedule);
+
                     return Response.json(
                         {
                             success: true,
-                            job: { ...job, id: job.id.id },
+                            schedule,
                         },
                         { status: 201 },
                     );
                 } catch (error) {
+                    console.log(error);
                     return Response.json(
                         {
                             success: false,
@@ -159,25 +128,19 @@ const server = serve({
                         },
                         { status: 500 },
                     );
-                } finally {
-                    await db.close();
                 }
             },
         },
-        "/api/jobs/:id": {
+        "/api/schedules/:id": {
             async GET(req: { params: { id: string } }) {
                 try {
-                    await db.connect("surrealkv://scheduler", {
-                        database: "scheduler",
-                        namespace: "scheduler",
-                    });
-                    const job = await db.select<JobRequest>(
-                        new RecordId("jobs", req.params.id),
+                    const status = await scheduler.getScheduleStatus(
+                        req.params.id,
                     );
                     return Response.json(
                         {
                             success: true,
-                            job,
+                            ...status,
                         },
                         { status: 200 },
                     );
@@ -192,22 +155,19 @@ const server = serve({
                         },
                         { status: 500 },
                     );
-                } finally {
-                    await db.close();
                 }
             },
             async DELETE(req: { params: { id: string } }) {
                 try {
-                    await db.connect("surrealkv://scheduler", {
-                        database: "scheduler",
-                        namespace: "scheduler",
-                    });
-                    await jobQueue.cancelJob(req.params.id);
-                    await db.delete(new RecordId("jobs", req.params.id));
+                    await scheduler.deleteSchedule(req.params.id);
+
+                    // Broadcast the schedule deletion
+                    webSocketService.broadcastScheduleDeleted(req.params.id);
+
                     return Response.json(
                         {
                             success: true,
-                            message: "Job canceled and deleted successfully",
+                            message: "Schedule deleted successfully",
                         },
                         { status: 200 },
                     );
@@ -222,65 +182,29 @@ const server = serve({
                         },
                         { status: 500 },
                     );
-                } finally {
-                    await db.close();
                 }
             },
             async PUT(req: {
                 params: { id: string };
-                json: () => JobRequest | PromiseLike<JobRequest>;
-            }) {
-                const jobRequest = await req.json();
-
-                await db.connect("surrealkv://scheduler", {
-                    database: "scheduler",
-                    namespace: "scheduler",
-                });
-                const update = await db.update<JobRequest>(
-                    new RecordId("jobs", req.params.id),
-                    jobRequest,
-                );
-                await db.close();
-                return Response.json(
-                    {
-                        success: true,
-                        job: { ...update, id: update.id.id },
-                    },
-                    { status: 200 },
-                );
-            },
-        },
-        "/api/jobs/:id/start": {
-            async POST(req: {
-                params: { id: string };
-                json: () => JobRequest | PromiseLike<JobRequest>;
+                json: () => Partial<Schedule> | PromiseLike<Partial<Schedule>>;
             }) {
                 try {
-                    const jobRequest = await req.json();
-                    await db.connect("surrealkv://scheduler", {
-                        database: "scheduler",
-                        namespace: "scheduler",
-                    });
-                    await jobQueue.addJob(jobRequest);
-
-                    const updatedJob = {
-                        ...jobRequest,
-                        isActive: false,
-                        status: "running",
-                    };
-
-                    await db.update(
-                        new RecordId("jobs", req.params.id),
-                        updatedJob,
+                    const updates = await req.json();
+                    const schedule = await scheduler.updateSchedule(
+                        req.params.id,
+                        updates,
                     );
+                    webSocketService.broadcastScheduleUpdate(schedule);
+
                     return Response.json(
                         {
                             success: true,
-                            job: updatedJob,
+                            schedule,
                         },
                         { status: 200 },
                     );
                 } catch (error) {
+                    console.log(error);
                     return Response.json(
                         {
                             success: false,
@@ -291,39 +215,20 @@ const server = serve({
                         },
                         { status: 500 },
                     );
-                } finally {
-                    await db.close();
                 }
             },
         },
-
-        "/api/jobs/:id/stop": {
-            async POST(req: {
-                params: { id: string };
-                json: () => JobRequest | PromiseLike<JobRequest>;
-            }) {
+        "/api/schedules/:id/start": {
+            async POST(req: { params: { id: string } }) {
                 try {
-                    const jobRequest = await req.json();
-                    await db.connect("surrealkv://scheduler", {
-                        database: "scheduler",
-                        namespace: "scheduler",
-                    });
-
-                    await jobQueue.cancelJob(req.params.id);
-
-                    const updatedJob = {
-                        ...jobRequest,
-                        isActive: false,
-                        status: "idle",
-                    };
-                    await db.update(
-                        new RecordId("jobs", req.params.id),
-                        updatedJob,
+                    const schedule = await scheduler.startSchedule(
+                        req.params.id,
                     );
+                    webSocketService.broadcastScheduleStarted(schedule);
                     return Response.json(
                         {
                             success: true,
-                            job: updatedJob,
+                            schedule,
                         },
                         { status: 200 },
                     );
@@ -338,22 +243,22 @@ const server = serve({
                         },
                         { status: 500 },
                     );
-                } finally {
-                    await db.close();
                 }
             },
         },
-        "/api/jobs/:id/delete": {
-            async DELETE(req: { params: { id: string } }) {
+        "/api/schedules/:id/stop": {
+            async POST(req: { params: { id: string } }) {
                 try {
-                    await db.connect("surrealkv://scheduler", {
-                        database: "scheduler",
-                        namespace: "scheduler",
-                    });
-                    await db.delete(req.params.id);
+                    const schedule = await scheduler.stopSchedule(
+                        req.params.id,
+                    );
+
+                    webSocketService.broadcastScheduleStopped(schedule);
+
                     return Response.json(
                         {
                             success: true,
+                            schedule,
                         },
                         { status: 200 },
                     );
@@ -368,12 +273,24 @@ const server = serve({
                         },
                         { status: 500 },
                     );
-                } finally {
-                    await db.close();
                 }
             },
         },
     },
     development: process.env.NODE_ENV !== "production",
 });
+
 console.log(`🚀 Server running at ${server.url}`);
+
+// Graceful shutdown
+process.on("SIGINT", async () => {
+    console.log("Shutting down gracefully...");
+    await scheduler.shutdown();
+    process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+    console.log("Shutting down gracefully...");
+    await scheduler.shutdown();
+    process.exit(0);
+});
