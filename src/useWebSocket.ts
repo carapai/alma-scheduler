@@ -21,7 +21,23 @@ export function useWebSocket(url: string): WebSocketHook {
     const connect = () => {
         try {
             const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            const host = window.location.host;
+            
+            // Handle different deployment environments
+            let wsUrl: string;
+            if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+                // Development mode - use current host which includes port
+                wsUrl = `${protocol}//${host}${url}`;
+            } else if (host.includes("alma.services.dhis2.hispuganda.org")) { // cSpell:disable-line
+                // Production deployment for DHIS2 Uganda instance
+                // You may need to adjust this based on your actual deployment setup
+                wsUrl = `${protocol}//${host}${url}`;
+            } else {
+                // Default production mode
+                wsUrl = `${protocol}//${host}${url}`;
+            }
+            
+            console.log("Attempting WebSocket connection to:", wsUrl);
             
             wsRef.current = new WebSocket(wsUrl);
 
