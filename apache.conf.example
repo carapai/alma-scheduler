@@ -1,0 +1,50 @@
+<VirtualHost *:80>
+    ServerName alma.services.dhis2.hispuganda.org
+    
+    # Redirect HTTP to HTTPS
+    RewriteEngine On
+    RewriteCond %{HTTPS} off
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName alma.services.dhis2.hispuganda.org
+    
+    # SSL Configuration (add your SSL certificates)
+    SSLEngine on
+    # SSLCertificateFile /path/to/your/certificate.crt
+    # SSLCertificateKeyFile /path/to/your/private.key
+    # SSLCertificateChainFile /path/to/your/chain.crt
+    
+    # Enable required modules for WebSocket support
+    # LoadModule proxy_module modules/mod_proxy.so
+    # LoadModule proxy_http_module modules/mod_proxy_http.so
+    # LoadModule proxy_wstunnel_module modules/mod_proxy_wstunnel.so
+    # LoadModule rewrite_module modules/mod_rewrite.so
+    
+    # WebSocket proxy configuration
+    ProxyPreserveHost On
+    ProxyRequests Off
+    
+    # WebSocket specific location - must come before general proxy
+    ProxyPass /ws ws://localhost:3003/ws
+    ProxyPassReverse /ws ws://localhost:3003/ws
+    
+    # Handle WebSocket upgrade
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteRule ^/ws$ ws://localhost:3003/ws [P,L]
+    
+    # All other requests
+    ProxyPass / http://localhost:3003/
+    ProxyPassReverse / http://localhost:3003/
+    
+    # Set headers for proxy
+    ProxyPassReverse / http://localhost:3003/
+    ProxyPreserveHost On
+    
+    # Logging
+    ErrorLog ${APACHE_LOG_DIR}/alma-scheduler-error.log
+    CustomLog ${APACHE_LOG_DIR}/alma-scheduler-access.log combined
+</VirtualHost>

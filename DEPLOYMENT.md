@@ -22,8 +22,28 @@ sudo pm2 start ecosystem.config.js --env production
 
 ### Option 2: Use Reverse Proxy (If you can't run on port 80)
 
-If you can't run on port 80, keep your current setup and configure nginx:
+If you can't run on port 80, keep your current setup and configure your web server:
 
+#### For Apache:
+```bash
+# Keep current PM2 process
+pm2 start "bun run start" --name alma
+
+# Enable required Apache modules
+sudo a2enmod proxy
+sudo a2enmod proxy_http
+sudo a2enmod proxy_wstunnel
+sudo a2enmod rewrite
+sudo a2enmod ssl
+
+# Configure Apache (copy apache.conf.example to your Apache sites)
+sudo cp apache.conf.example /etc/apache2/sites-available/alma-scheduler.conf
+sudo a2ensite alma-scheduler
+sudo apache2ctl configtest
+sudo systemctl reload apache2
+```
+
+#### For Nginx:
 ```bash
 # Keep current PM2 process
 pm2 start "bun run start" --name alma
@@ -60,7 +80,23 @@ Then update your domain to point to the custom port or configure reverse proxy.
    pm2 logs alma
    ```
 
-3. **Verify port is accessible**:
+3. **Check Apache logs** (if using Apache):
+   ```bash
+   sudo tail -f /var/log/apache2/alma-scheduler-error.log
+   sudo tail -f /var/log/apache2/alma-scheduler-access.log
+   ```
+
+4. **Verify Apache modules are enabled**:
+   ```bash
+   apache2ctl -M | grep -E "(proxy|rewrite|ssl)"
+   ```
+
+5. **Test Apache configuration**:
+   ```bash
+   sudo apache2ctl configtest
+   ```
+
+6. **Verify port is accessible**:
    ```bash
    netstat -tlnp | grep :80
    # or
