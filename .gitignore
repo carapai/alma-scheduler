@@ -39,3 +39,8 @@ configuration.json
 scheduler/
 server.log
 server.pid
+
+# Backup files
+*.old
+*.bak
+*.backup
