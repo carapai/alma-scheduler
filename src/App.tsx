@@ -1,6 +1,5 @@
 import "@/index.css";
 import { Schedule } from "@/interfaces";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
 import type { TableColumnsType } from "antd";
 import {
 	Badge,
@@ -22,7 +21,8 @@ import { Play, Settings, Square, Trash2, Wifi, WifiOff } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useWebSocketDexie } from "./useWebSocketDexie";
-import { useScheduleData } from "./useScheduleData";
+import { useLiveQuery } from "dexie-react-hooks";
+import { scheduleDB } from "./dexie-db";
 
 const getStatusColor = (status?: string) => {
     switch (status) {
@@ -71,7 +71,6 @@ const defaultSchedule: Omit<Schedule, "id" | "createdAt" | "updatedAt"> = {
 };
 
 export function App() {
-    const queryClient = useQueryClient();
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isEditing, setIsEditing] = useState<boolean>(false);
     const [current, setCurrent] = useState<Schedule>(
@@ -82,16 +81,122 @@ export function App() {
     const scheduleType = Form.useWatch("type", form);
     const periodType = Form.useWatch(["data", "periodType"], form);
 
-
-    // Use Dexie-based hooks
-    const { schedules: dexieSchedules, syncSchedules, upsertSchedule, deleteSchedule: deleteDexieSchedule, isLoading: dexieLoading } = useScheduleData();
+    // Use Dexie with useLiveQuery for reactive data
+    const dexieSchedules = useLiveQuery(() => scheduleDB.getAllSchedules(), []);
     const { isConnected, lastMessage, connectionError } = useWebSocketDexie("/ws");
     
-    // Keep this for initial data load and other queries
+    // Load initial data from server and sync with Dexie
+    useEffect(() => {
+        const loadInitialData = async () => {
+            try {
+                const response = await fetch("/api/schedules");
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success && data.schedules) {
+                        await scheduleDB.syncSchedules(data.schedules);
+                    }
+                }
+            } catch (error) {
+                console.error("Failed to load initial schedules:", error);
+            }
+        };
+
+        loadInitialData();
+    }, []);
+
+    // Load processors and instances separately (these don't need real-time updates)
+    const [processors, setProcessors] = useState<string[]>([]);
+    const [instances, setInstances] = useState<{
+        dhis2Instances: string[];
+        almaInstances: string[];
+    }>({ dhis2Instances: [], almaInstances: [] });
+
+    useEffect(() => {
+        const loadStaticData = async () => {
+            try {
+                const [processorsRes, instancesRes] = await Promise.all([
+                    fetch("/api/processors"),
+                    fetch("/api/instances")
+                ]);
+
+                if (processorsRes.ok) {
+                    const processorsData = await processorsRes.json();
+                    if (processorsData.success) {
+                        setProcessors(processorsData.processors);
+                    }
+                }
+
+                if (instancesRes.ok) {
+                    const instancesData = await instancesRes.json();
+                    if (instancesData.success) {
+                        setInstances({
+                            dhis2Instances: instancesData.dhis2Instances,
+                            almaInstances: instancesData.almaInstances,
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error("Failed to load static data:", error);
+            }
+        };
+
+        loadStaticData();
+    }, []);
+
+    // Handle WebSocket messages and update Dexie
     useEffect(() => {
         if (lastMessage) {
             console.log("WebSocket message received:", lastMessage);
-            // No need to invalidate queries - Dexie hooks handle updates automatically
+            
+            const handleWebSocketMessage = async () => {
+                try {
+                    switch (lastMessage.type) {
+                        case "progress_update":
+                            if ("id" in lastMessage.data && "progress" in lastMessage.data) {
+                                const { id, progress, message } = lastMessage.data as { id: string; progress: number; message?: string };
+                                console.log(`Updating Dexie progress for ${id}: ${progress}%`);
+                                await scheduleDB.updateScheduleProgress(id, progress, message);
+                            }
+                            break;
+                        
+                        case "schedule_update":
+                            if ("id" in lastMessage.data) {
+                                const schedule = lastMessage.data as Schedule;
+                                console.log(`Updating Dexie schedule:`, schedule);
+                                await scheduleDB.upsertSchedule(schedule);
+                            }
+                            break;
+                        
+                        case "schedule_created":
+                            const newSchedule = lastMessage.data as Schedule;
+                            console.log(`Adding new schedule to Dexie:`, newSchedule);
+                            await scheduleDB.upsertSchedule(newSchedule);
+                            break;
+                        
+                        case "schedule_deleted":
+                            if ("id" in lastMessage.data) {
+                                const { id } = lastMessage.data as { id: string };
+                                console.log(`Deleting schedule from Dexie: ${id}`);
+                                await scheduleDB.deleteSchedule(id);
+                            }
+                            break;
+                        
+                        case "schedule_started":
+                        case "schedule_stopped":
+                            const updatedSchedule = lastMessage.data as Schedule;
+                            console.log(`Updating schedule status in Dexie:`, updatedSchedule);
+                            await scheduleDB.upsertSchedule(updatedSchedule);
+                            break;
+                        
+                        default:
+                            console.log(`Unhandled message type: ${lastMessage.type}`);
+                    }
+                } catch (error) {
+                    console.error("Error handling WebSocket message:", error);
+                }
+            };
+            
+            handleWebSocketMessage();
         }
     }, [lastMessage]);
 
@@ -120,9 +225,7 @@ export function App() {
             if (response.ok) {
                 const data = await response.json();
                 // Update Dexie directly
-                await upsertSchedule(data.schedule);
-                // Also update React Query for consistency
-                updateUI(data.schedule, true);
+                await scheduleDB.upsertSchedule(data.schedule);
             }
         } catch (error) {
             console.error("Failed to start schedule:", error);
@@ -137,9 +240,7 @@ export function App() {
             if (response.ok) {
                 const data = await response.json();
                 // Update Dexie directly
-                await upsertSchedule(data.schedule);
-                // Also update React Query for consistency
-                updateUI(data.schedule, true);
+                await scheduleDB.upsertSchedule(data.schedule);
             }
         } catch (error) {
             console.error("Failed to stop schedule:", error);
@@ -154,9 +255,7 @@ export function App() {
                 });
                 if (response.ok) {
                     // Update Dexie directly
-                    await deleteDexieSchedule(schedule.id);
-                    // Also invalidate React Query for consistency
-                    queryClient.invalidateQueries({ queryKey: ["schedules"] });
+                    await scheduleDB.deleteSchedule(schedule.id);
                 }
             } catch (error) {
                 console.error("Failed to delete schedule:", error);
@@ -301,104 +400,20 @@ export function App() {
         },
     ];
 
-    const { isPending, hasErrors, errors, schedules: serverSchedules, processors, instances } =
-        useQueries({
-            queries: [
-                {
-                    queryKey: ["schedules"],
-                    queryFn: () =>
-                        fetch("/api/schedules").then((res) => res.json()),
-                },
-                {
-                    queryKey: ["processors"],
-                    queryFn: () =>
-                        fetch("/api/processors").then((res) => res.json()),
-                },
-                {
-                    queryKey: ["instances"],
-                    queryFn: () =>
-                        fetch("/api/instances").then((res) => res.json()),
-                },
-            ],
-            combine: (results) => {
-                const isPending = results.some((result) => result.isPending);
-                const hasErrors = results.some((result) => result.isError);
-                const errors = results
-                    .filter((result) => result.isError)
-                    .map((result) => result.error);
-
-                let schedules: Schedule[] = [];
-                let processors: string[] = [];
-                let instances: {
-                    dhis2Instances: string[];
-                    almaInstances: string[];
-                } = {
-                    dhis2Instances: [],
-                    almaInstances: [],
-                };
-
-                const [schedulesResult, processorsResult, instancesResult] = results;
-
-                // Get schedules data (even if pending, keep previous data)
-                if (schedulesResult.data?.success) {
-                    schedules = schedulesResult.data.schedules;
-                } else if (schedulesResult.data && Array.isArray(schedulesResult.data)) {
-                    // Fallback if data structure is different
-                    schedules = schedulesResult.data;
-                }
-
-                if (processorsResult.data?.success) {
-                    processors = processorsResult.data.processors;
-                }
-                if (instancesResult.data?.success) {
-                    instances = {
-                        dhis2Instances: instancesResult.data.dhis2Instances,
-                        almaInstances: instancesResult.data.almaInstances,
-                    };
-                }
-
-                return {
-                    schedules,
-                    processors,
-                    instances,
-                    isPending,
-                    hasErrors,
-                    errors,
-                };
-            },
-        });
-    
-    // Sync server data with Dexie when it changes
-    useEffect(() => {
-        if (serverSchedules && serverSchedules.length > 0) {
-            syncSchedules(serverSchedules);
-        }
-    }, [serverSchedules, syncSchedules]);
-    
-    // Use Dexie schedules as primary data source, fall back to server data
-    const schedules = (dexieSchedules && dexieSchedules.length > 0 ? dexieSchedules : serverSchedules || []) as Schedule[];
+    // Use Dexie schedules with enhanced progress data
+    const schedules = (dexieSchedules || []).map(schedule => ({
+        ...schedule,
+        // Use local progress if available and more recent, otherwise use server progress
+        progress: schedule.localProgress !== undefined ? schedule.localProgress : schedule.progress,
+        message: schedule.localMessage || schedule.message,
+        status: schedule.localStatus || schedule.status
+    })) as Schedule[];
 
     const handleCancel = () => {
         setIsModalOpen(false);
         setIsEditing(false);
         setCurrent(defaultSchedule as Schedule);
         form.resetFields();
-    };
-
-    const updateUI = (schedule: Schedule, editing: boolean) => {
-        queryClient.setQueryData<{ schedules: Schedule[] }>(
-            ["schedules"],
-            (prev) => {
-                if (prev && editing) {
-                    return {
-                        schedules: prev.schedules.map((s) =>
-                            s.id === schedule.id ? schedule : s,
-                        ),
-                    };
-                }
-                return prev;
-            },
-        );
     };
 
     const onCreate = async (values: Schedule) => {
@@ -419,9 +434,7 @@ export function App() {
             if (response.ok) {
                 const data = await response.json();
                 // Update Dexie directly
-                await upsertSchedule(data.schedule);
-                // Also invalidate React Query for consistency
-                queryClient.invalidateQueries({ queryKey: ["schedules"] });
+                await scheduleDB.upsertSchedule(data.schedule);
                 setIsModalOpen(false);
                 setIsEditing(false);
                 setCurrent(defaultSchedule as Schedule);
@@ -432,15 +445,7 @@ export function App() {
         }
     };
 
-    if (isPending || dexieLoading) return <div>Loading...</div>;
-
-    if (hasErrors) {
-        return (
-            <div>
-                An error has occurred: {errors.map((e) => e.message).join(", ")}
-            </div>
-        );
-    }
+    if (!dexieSchedules) return <div>Loading...</div>;
 
     return (
         <Flex
