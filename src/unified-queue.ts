@@ -55,7 +55,7 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
             data as any,
             jobOptions,
         );
-				console.log(`Added job ${job.id} to queue ${this.queueName}`);
+        console.log(`Added job ${job.id} to queue ${this.queueName}`);
         return job;
     }
 
@@ -144,6 +144,7 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
      */
     async cancelJob(jobId: string): Promise<boolean> {
         const job = await this.queue.getJob(jobId);
+        console.log(job);
         if (!job) {
             return false;
         }

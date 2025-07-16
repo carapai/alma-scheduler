@@ -2,19 +2,20 @@ import "@/index.css";
 import { Schedule } from "@/interfaces";
 import type { TableColumnsType } from "antd";
 import {
-	Badge,
-	Button,
-	DatePicker,
-	Flex,
-	Form,
-	Input,
-	InputNumber,
-	Modal,
-	Progress,
-	Select,
-	Switch,
-	Table,
-	Tag,
+    Badge,
+    Button,
+    DatePicker,
+    Flex,
+    Form,
+    Input,
+    InputNumber,
+    Modal,
+    Progress,
+    Select,
+    Switch,
+    Table,
+    Tag,
+		Typography,
 } from "antd";
 import dayjs from "dayjs";
 import { Play, Settings, Square, Trash2, Wifi, WifiOff } from "lucide-react";
@@ -81,8 +82,9 @@ export function App() {
     const scheduleType = Form.useWatch("type", form);
     const periodType = Form.useWatch(["data", "periodType"], form);
     const dexieSchedules = useLiveQuery(() => scheduleDB.getAllSchedules(), []);
-    const { isConnected, lastMessage, connectionError } = useWebSocketDexie("/ws");
-        useEffect(() => {
+    const { isConnected, lastMessage, connectionError } =
+        useWebSocketDexie("/ws");
+    useEffect(() => {
         const loadInitialData = async () => {
             try {
                 const response = await fetch("/api/schedules");
@@ -112,7 +114,7 @@ export function App() {
             try {
                 const [processorsRes, instancesRes] = await Promise.all([
                     fetch("/api/processors"),
-                    fetch("/api/instances")
+                    fetch("/api/instances"),
                 ]);
 
                 if (processorsRes.ok) {
@@ -143,55 +145,85 @@ export function App() {
     useEffect(() => {
         if (lastMessage) {
             console.log("WebSocket message received:", lastMessage);
-            
+
             const handleWebSocketMessage = async () => {
                 try {
                     switch (lastMessage.type) {
                         case "progress_update":
-                            if ("id" in lastMessage.data && "progress" in lastMessage.data) {
-                                const { id, progress, message } = lastMessage.data as { id: string; progress: number; message?: string };
-                                console.log(`Updating Dexie progress for ${id}: ${progress}%`);
-                                await scheduleDB.updateScheduleProgress(id, progress, message);
+                            if (
+                                "id" in lastMessage.data &&
+                                "progress" in lastMessage.data
+                            ) {
+                                const { id, progress, message } =
+                                    lastMessage.data as {
+                                        id: string;
+                                        progress: number;
+                                        message?: string;
+                                    };
+                                console.log(
+                                    `Updating Dexie progress for ${id}: ${progress}%`,
+                                );
+                                await scheduleDB.updateScheduleProgress(
+                                    id,
+                                    progress,
+                                    message,
+                                );
                             }
                             break;
-                        
+
                         case "schedule_update":
                             if ("id" in lastMessage.data) {
                                 const schedule = lastMessage.data as Schedule;
-                                console.log(`Updating Dexie schedule:`, schedule);
+                                console.log(
+                                    `Updating Dexie schedule:`,
+                                    schedule,
+                                );
                                 await scheduleDB.upsertSchedule(schedule);
                             }
                             break;
-                        
+
                         case "schedule_created":
                             const newSchedule = lastMessage.data as Schedule;
-                            console.log(`Adding new schedule to Dexie:`, newSchedule);
+                            console.log(
+                                `Adding new schedule to Dexie:`,
+                                newSchedule,
+                            );
                             await scheduleDB.upsertSchedule(newSchedule);
                             break;
-                        
+
                         case "schedule_deleted":
                             if ("id" in lastMessage.data) {
-                                const { id } = lastMessage.data as { id: string };
-                                console.log(`Deleting schedule from Dexie: ${id}`);
+                                const { id } = lastMessage.data as {
+                                    id: string;
+                                };
+                                console.log(
+                                    `Deleting schedule from Dexie: ${id}`,
+                                );
                                 await scheduleDB.deleteSchedule(id);
                             }
                             break;
-                        
+
                         case "schedule_started":
                         case "schedule_stopped":
-                            const updatedSchedule = lastMessage.data as Schedule;
-                            console.log(`Updating schedule status in Dexie:`, updatedSchedule);
+                            const updatedSchedule =
+                                lastMessage.data as Schedule;
+                            console.log(
+                                `Updating schedule status in Dexie:`,
+                                updatedSchedule,
+                            );
                             await scheduleDB.upsertSchedule(updatedSchedule);
                             break;
-                        
+
                         default:
-                            console.log(`Unhandled message type: ${lastMessage.type}`);
+                            console.log(
+                                `Unhandled message type: ${lastMessage.type}`,
+                            );
                     }
                 } catch (error) {
                     console.error("Error handling WebSocket message:", error);
                 }
             };
-            
+
             handleWebSocketMessage();
         }
     }, [lastMessage]);
@@ -325,7 +357,12 @@ export function App() {
             dataIndex: "progress",
             key: "progress",
             render: (progress) => (
-                <Progress percent={Number(progress)} size="small" />
+                <Progress
+                    percent={Number(progress)}
+                    size="small"
+										type="line"
+                    format={(percent) => `${percent?.toFixed(1)}%`}
+                />
             ),
         },
         {
@@ -362,7 +399,7 @@ export function App() {
             key: "actions",
             render: (_, schedule) => (
                 <Flex gap="8px">
-                    {schedule.status === "running"  ? (
+                    {schedule.status === "running" ? (
                         <Button
                             type="text"
                             icon={<Square className="w-4 h-4" />}
@@ -395,13 +432,14 @@ export function App() {
         },
     ];
 
-    // Use Dexie schedules with enhanced progress data
-    const schedules = (dexieSchedules || []).map(schedule => ({
+    const schedules = (dexieSchedules || []).map((schedule) => ({
         ...schedule,
-        // Use local progress if available and more recent, otherwise use server progress
-        progress: schedule.localProgress !== undefined ? schedule.localProgress : schedule.progress,
+        progress:
+            schedule.localProgress !== undefined
+                ? schedule.localProgress
+                : schedule.progress,
         message: schedule.localMessage || schedule.message,
-        status: schedule.localStatus || schedule.status
+        status: schedule.localStatus || schedule.status,
     })) as Schedule[];
 
     const handleCancel = () => {
@@ -451,7 +489,7 @@ export function App() {
         >
             <Flex justify="space-between" align="center">
                 <Flex align="center" gap="16px">
-                    <h1 style={{ margin: 0 }}>Schedule Management</h1>
+                    <Typography.Title level={3}>Schedule Management</Typography.Title>
                     <Badge
                         status={isConnected ? "success" : "error"}
                         text={

@@ -24,10 +24,12 @@ export class Scheduler {
             "dhis2-alma-sync",
             this.jobQueue.createProgressTrackingProcessor(
                 async (job, updateProgress) => {
-                    // Use scheduleId from job data instead of job ID
-                    const scheduleId = job.data.scheduleId || job.opts.jobId || "";
-                    console.log(`Processing job ${job.id} for schedule ${scheduleId}`);
-                    
+                    const scheduleId =
+                        job.data.scheduleId || job.opts.jobId || "";
+                    console.log(
+                        `Processing job ${job.id} for schedule ${scheduleId}`,
+                    );
+
                     const runningSchedule =
                         await scheduleService.updateScheduleStatus(
                             scheduleId,
@@ -37,9 +39,6 @@ export class Scheduler {
                     webSocketService.broadcastScheduleUpdate(runningSchedule);
                     try {
                         const progressCallback = async (progress: any) => {
-                            console.log(
-                                `Progress update for schedule ${scheduleId} (job ${job.id}): ${progress}`,
-                            );
                             await updateProgress(progress);
 
                             const progressNum =
@@ -54,7 +53,6 @@ export class Scheduler {
                                 progressNum,
                             );
 
-                            console.log(`Broadcasting progress ${progressNum}% for schedule ${scheduleId} to ${webSocketService.getConnectionCount()} connections`);
                             webSocketService.broadcastProgress(
                                 scheduleId,
                                 progressNum,
@@ -116,15 +114,16 @@ export class Scheduler {
         if (!schedule) {
             throw new Error(`Schedule ${id} not found`);
         }
-        
-        // Reset progress to 0 and status when starting/restarting a schedule
+
         await scheduleService.updateScheduleProgress(id, 0);
-        await scheduleService.updateScheduleStatus(id, "idle", "Ready to start");
+        await scheduleService.updateScheduleStatus(
+            id,
+            "idle",
+            "Ready to start",
+        );
         const updatedSchedule = await scheduleService.getSchedule(id);
-        
-        // Broadcast progress reset to UI
         webSocketService.broadcastProgress(id, 0, "Starting job...");
-        
+
         await this.setupJob(updatedSchedule!);
         return updatedSchedule!;
     }
@@ -134,14 +133,14 @@ export class Scheduler {
         if (!schedule) {
             throw new Error(`Schedule ${id} not found`);
         }
-        
+
         // Cancel the appropriate job based on schedule type
         if (schedule.type === "recurring") {
             await this.jobQueue.cancelJob(`recurring-${id}`);
         } else {
             await this.jobQueue.cancelJob(id);
         }
-        
+
         await scheduleService.deactivateSchedule(id);
 
         return schedule;
@@ -156,12 +155,7 @@ export class Scheduler {
     }
 
     private async setupJob(schedule: Schedule) {
-        // Cancel existing jobs for this schedule
-        if (schedule.type === "recurring") {
-            await this.jobQueue.cancelJob(`recurring-${schedule.id}`);
-        } else {
-            await this.jobQueue.cancelJob(schedule.id);
-        }
+        await this.jobQueue.cancelJob(schedule.id);
         const jobData = {
             processor: schedule.processor,
             dhis2Instance:
@@ -174,7 +168,7 @@ export class Scheduler {
             period: schedule.data.periods,
             runFor: schedule.data.runFor,
             ...schedule.data,
-            scheduleId: schedule.id, // Add schedule ID to job data
+            scheduleId: schedule.id,
         };
 
         const jobOptions: JobsOptions = {
@@ -183,16 +177,13 @@ export class Scheduler {
         };
 
         if (schedule.type === "recurring" && schedule.cronExpression) {
-            // For recurring jobs, don't use schedule ID as job ID
-            // Let BullMQ generate unique job IDs for each execution
             jobOptions.repeat = {
                 pattern: schedule.cronExpression,
                 immediately: schedule.runImmediately,
             };
-            // Use schedule ID as repeat job key for easier cancellation
-            jobOptions.jobId = `recurring-${schedule.id}`;
+            jobOptions.jobId = schedule.id;
+            jobOptions.repeatJobKey = schedule.id;
         } else {
-            // For one-time jobs, use schedule ID as job ID
             jobOptions.jobId = schedule.id;
         }
 
