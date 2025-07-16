@@ -15,10 +15,10 @@ import {
     Switch,
     Table,
     Tag,
-		Typography,
+    Typography,
 } from "antd";
 import dayjs from "dayjs";
-// import { parseExpression } from "cron-parser";
+import { CronExpressionParser } from "cron-parser";
 import { Play, Settings, Square, Trash2, Wifi, WifiOff } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { v4 as uuidV4 } from "uuid";
@@ -243,7 +243,6 @@ export function App() {
     }, [scheduleType, form]);
 
     const handleStart = async (schedule: Schedule) => {
-        console.log("Starting schedule:", schedule);
         try {
             const response = await fetch(
                 `/api/schedules/${schedule.id}/start`,
@@ -361,7 +360,7 @@ export function App() {
                 <Progress
                     percent={Number(progress)}
                     size="small"
-										type="line"
+                    type="line"
                     format={(percent) => `${percent?.toFixed(1)}%`}
                 />
             ),
@@ -380,10 +379,26 @@ export function App() {
             key: "nextRun",
             render: (_, schedule) => {
                 if (schedule.nextRun) {
-                    return dayjs(schedule.nextRun).format("YYYY-MM-DD HH:mm:ss");
-                } else if (schedule.type === "recurring" && schedule.cronExpression && schedule.isActive) {
-                    return `Cron: ${schedule.cronExpression}`;
-                } else if (schedule.type === "one-time" && schedule.data?.periods?.length > 0) {
+                    return dayjs(schedule.nextRun).format(
+                        "YYYY-MM-DD HH:mm:ss",
+                    );
+                } else if (
+                    schedule.type === "recurring" &&
+                    schedule.cronExpression
+                ) {
+                    try {
+                        const interval = CronExpressionParser.parse(
+                            schedule.cronExpression,
+                        );
+                        return dayjs(interval.next().toDate()).format(
+                            "YYYY-MM-DD HH:mm:ss",
+                        );
+                    } catch (error) {}
+                    return "Invalid cron expression";
+                } else if (
+                    schedule.type === "one-time" &&
+                    schedule.data?.periods?.length > 0
+                ) {
                     return "Manual start";
                 } else {
                     return "Not scheduled";
@@ -505,7 +520,9 @@ export function App() {
         >
             <Flex justify="space-between" align="center">
                 <Flex align="center" gap="16px">
-                    <Typography.Title level={3}>Schedule Management</Typography.Title>
+                    <Typography.Title level={3}>
+                        Schedule Management
+                    </Typography.Title>
                     <Badge
                         status={isConnected ? "success" : "error"}
                         text={
