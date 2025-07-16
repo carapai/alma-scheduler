@@ -18,7 +18,7 @@ import {
 		Typography,
 } from "antd";
 import dayjs from "dayjs";
-import * as cronParser from "cron-parser";
+import cronParser from "cron-parser";
 import { Play, Settings, Square, Trash2, Wifi, WifiOff } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
