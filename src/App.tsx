@@ -704,30 +704,28 @@ export function App() {
                             >
                                 <Input />
                             </Form.Item>
-                            {scheduleType !== "recurring" && (
-                                <Form.Item
-                                    name={["data", "periodType"]}
-                                    label="Period Type"
-                                    rules={[{ required: true }]}
-                                    tooltip="For non-recurring schedules: choose the type of periods to select"
-                                >
-                                    <Select
-                                        options={[
-                                            { label: "Daily", value: "day" },
-                                            { label: "Weekly", value: "week" },
-                                            {
-                                                label: "Monthly",
-                                                value: "monthly",
-                                            },
-                                            {
-                                                label: "Quarterly",
-                                                value: "quarterly",
-                                            },
-                                            { label: "Yearly", value: "year" },
-                                        ]}
-                                    />
-                                </Form.Item>
-                            )}
+                            <Form.Item
+                                name={["data", "periodType"]}
+                                label="Period Type"
+                                rules={[{ required: true }]}
+                                tooltip="For non-recurring schedules: choose the type of periods to select"
+                            >
+                                <Select
+                                    options={[
+                                        { label: "Daily", value: "day" },
+                                        { label: "Weekly", value: "week" },
+                                        {
+                                            label: "Monthly",
+                                            value: "monthly",
+                                        },
+                                        {
+                                            label: "Quarterly",
+                                            value: "quarterly",
+                                        },
+                                        { label: "Yearly", value: "year" },
+                                    ]}
+                                />
+                            </Form.Item>
                             {scheduleType !== "recurring" && periodType && (
                                 <Form.Item
                                     name={["data", "periods"]}

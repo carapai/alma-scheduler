@@ -190,29 +190,25 @@ export const queryDHIS2 = async (
             for (let level = 1; level <= 6; level++) {
                 for (const [index, x] of indicators.entries()) {
                     count++;
-                    // console.log(
-                    //     `Processing ${
-                    //         x.name
-                    //     } for period ${p} at level ${level} (${index + 1}/${
-                    //         indicators.length
-                    //     })`,
-                    // );
-                    // await downloadCSV({
-                    //     indicator: x.id,
-                    //     indicatorName: x.name,
-                    //     level,
-                    //     period: p,
-                    //     current: index + 1,
-                    //     total: indicators.length,
-                    //     scorecard: Number(scorecard),
-                    //     dhis2Api,
-                    //     almaInstance,
-                    // });
-
-                    await new Promise((resolve) => setTimeout(resolve, 100));
-
+                    console.log(
+                        `Processing ${
+                            x.name
+                        } for period ${p} at level ${level} (${index + 1}/${
+                            indicators.length
+                        })`,
+                    );
+                    await downloadCSV({
+                        indicator: x.id,
+                        indicatorName: x.name,
+                        level,
+                        period: p,
+                        current: index + 1,
+                        total: indicators.length,
+                        scorecard: Number(scorecard),
+                        dhis2Api,
+                        almaInstance,
+                    });
                     const progress = (count / totalIterations) * 100;
-                    // console.log(`Progress: ${progress.toFixed(2)}%`);
                     await updateProgress(progress);
                 }
             }
