@@ -18,6 +18,7 @@ import {
 		Typography,
 } from "antd";
 import dayjs from "dayjs";
+import * as cronParser from "cron-parser";
 import { Play, Settings, Square, Trash2, Wifi, WifiOff } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -373,6 +374,27 @@ export function App() {
                 lastRun
                     ? dayjs(lastRun).format("YYYY-MM-DD HH:mm:ss")
                     : "Never",
+        },
+        {
+            title: "Next Run",
+            key: "nextRun",
+            render: (_, schedule) => {
+                try {
+                    if (schedule.type === "recurring" && schedule.cronExpression && schedule.isActive) {
+                        const interval = cronParser.parseExpression(schedule.cronExpression);
+                        const nextRun = interval.next().toDate();
+                        return dayjs(nextRun).format("YYYY-MM-DD HH:mm:ss");
+                    } else if (schedule.nextRun) {
+                        return dayjs(schedule.nextRun).format("YYYY-MM-DD HH:mm:ss");
+                    } else if (schedule.type === "one-time" && schedule.data?.periods?.length > 0) {
+                        return "Manual start";
+                    } else {
+                        return "Not scheduled";
+                    }
+                } catch (error) {
+                    return "Invalid cron";
+                }
+            },
         },
         {
             title: "Schedule",
