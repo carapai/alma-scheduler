@@ -18,10 +18,10 @@ import {
 		Typography,
 } from "antd";
 import dayjs from "dayjs";
-import cronParser from "cron-parser";
+// import { parseExpression } from "cron-parser";
 import { Play, Settings, Square, Trash2, Wifi, WifiOff } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidV4 } from "uuid";
 import { useWebSocketDexie } from "./useWebSocketDexie";
 import { useLiveQuery } from "dexie-react-hooks";
 import { scheduleDB } from "./dexie-db";
@@ -379,20 +379,14 @@ export function App() {
             title: "Next Run",
             key: "nextRun",
             render: (_, schedule) => {
-                try {
-                    if (schedule.type === "recurring" && schedule.cronExpression && schedule.isActive) {
-                        const interval = cronParser.parseExpression(schedule.cronExpression);
-                        const nextRun = interval.next().toDate();
-                        return dayjs(nextRun).format("YYYY-MM-DD HH:mm:ss");
-                    } else if (schedule.nextRun) {
-                        return dayjs(schedule.nextRun).format("YYYY-MM-DD HH:mm:ss");
-                    } else if (schedule.type === "one-time" && schedule.data?.periods?.length > 0) {
-                        return "Manual start";
-                    } else {
-                        return "Not scheduled";
-                    }
-                } catch (error) {
-                    return "Invalid cron";
+                if (schedule.nextRun) {
+                    return dayjs(schedule.nextRun).format("YYYY-MM-DD HH:mm:ss");
+                } else if (schedule.type === "recurring" && schedule.cronExpression && schedule.isActive) {
+                    return `Cron: ${schedule.cronExpression}`;
+                } else if (schedule.type === "one-time" && schedule.data?.periods?.length > 0) {
+                    return "Manual start";
+                } else {
+                    return "Not scheduled";
                 }
             },
         },
@@ -535,7 +529,7 @@ export function App() {
                     onClick={() => {
                         setCurrent({
                             ...defaultSchedule,
-                            id: uuidv4(),
+                            id: uuidV4(),
                         } as Schedule);
                         setIsEditing(false);
                         form.resetFields();
