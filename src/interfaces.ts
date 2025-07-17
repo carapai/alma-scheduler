@@ -60,3 +60,84 @@ export interface ProgressUpdate {
 export type ISchedule = Omit<Schedule, "id"> & {
     id: RecordId<"schedules">;
 };
+
+export type UserRole = "admin" | "user" | "viewer";
+
+export interface User {
+    id: string;
+    username: string;
+    email: string;
+    password: string;
+    role: UserRole;
+    isActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    lastLogin?: Date;
+    permissions?: string[];
+}
+
+export type IUser = Omit<User, "id"> & {
+    id: RecordId<"users">;
+};
+
+export interface Session {
+    id: string;
+    userId: string;
+    token: string;
+    expiresAt: Date;
+    createdAt: Date;
+    userAgent?: string;
+    ipAddress?: string;
+}
+
+export type ISession = Omit<Session, "id"> & {
+    id: RecordId<"sessions">;
+};
+
+export interface AuthResponse {
+    user: Omit<User, "password">;
+    token: string;
+    expiresAt: Date;
+}
+
+export interface LoginRequest {
+    username: string;
+    password: string;
+}
+
+export interface RegisterRequest {
+    username: string;
+    email: string;
+    password: string;
+    role?: UserRole;
+}
+
+export interface Permission {
+    resource: string;
+    action: string;
+    role: UserRole;
+}
+
+export const DEFAULT_PERMISSIONS: Permission[] = [
+    { resource: "schedules", action: "read", role: "viewer" },
+    { resource: "schedules", action: "read", role: "user" },
+    { resource: "schedules", action: "create", role: "user" },
+    { resource: "schedules", action: "update", role: "user" },
+    { resource: "schedules", action: "delete", role: "user" },
+    { resource: "schedules", action: "start", role: "user" },
+    { resource: "schedules", action: "stop", role: "user" },
+    { resource: "schedules", action: "read", role: "admin" },
+    { resource: "schedules", action: "create", role: "admin" },
+    { resource: "schedules", action: "update", role: "admin" },
+    { resource: "schedules", action: "delete", role: "admin" },
+    { resource: "schedules", action: "start", role: "admin" },
+    { resource: "schedules", action: "stop", role: "admin" },
+    { resource: "users", action: "read", role: "admin" },
+    { resource: "users", action: "create", role: "admin" },
+    { resource: "users", action: "update", role: "admin" },
+    { resource: "users", action: "delete", role: "admin" },
+    { resource: "instances", action: "read", role: "user" },
+    { resource: "instances", action: "read", role: "admin" },
+    { resource: "processors", action: "read", role: "user" },
+    { resource: "processors", action: "read", role: "admin" },
+];

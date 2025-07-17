@@ -38,12 +38,10 @@ export function useWebSocketDexie(url: string): WebSocketHook {
                 wsUrl = `${protocol}//${host}${url}`;
             }
             
-            console.log("Attempting WebSocket connection to:", wsUrl);
             
             wsRef.current = new WebSocket(wsUrl);
 
             wsRef.current.onopen = () => {
-                console.log("WebSocket connected successfully");
                 setIsConnected(true);
                 setConnectionError(null);
                 reconnectAttempts.current = 0;
@@ -52,7 +50,6 @@ export function useWebSocketDexie(url: string): WebSocketHook {
             wsRef.current.onmessage = async (event) => {
                 try {
                     const message: WebSocketMessage = JSON.parse(event.data);
-                    console.log("Client received WebSocket message:", message);
                     setLastMessage(message);
                     
                     // Update Dexie based on message type
@@ -63,7 +60,6 @@ export function useWebSocketDexie(url: string): WebSocketHook {
             };
 
             wsRef.current.onclose = () => {
-                console.log("WebSocket disconnected");
                 setIsConnected(false);
                 
                 // Attempt to reconnect
@@ -94,7 +90,6 @@ export function useWebSocketDexie(url: string): WebSocketHook {
             case "progress_update":
                 if ("id" in message.data && "progress" in message.data) {
                     const { id, progress, message: progressMessage } = message.data as { id: string; progress: number; message?: string };
-                    console.log(`Updating Dexie progress for ${id}: ${progress}%`);
                     await scheduleDB.updateScheduleProgress(id, progress, progressMessage);
                 }
                 break;
@@ -102,21 +97,18 @@ export function useWebSocketDexie(url: string): WebSocketHook {
             case "schedule_update":
                 if ("id" in message.data) {
                     const schedule = message.data as Schedule;
-                    console.log(`Updating Dexie schedule:`, schedule);
                     await scheduleDB.upsertSchedule(schedule);
                 }
                 break;
             
             case "schedule_created":
                 const newSchedule = message.data as Schedule;
-                console.log(`Adding new schedule to Dexie:`, newSchedule);
                 await scheduleDB.upsertSchedule(newSchedule);
                 break;
             
             case "schedule_deleted":
                 if ("id" in message.data) {
                     const { id } = message.data as { id: string };
-                    console.log(`Deleting schedule from Dexie: ${id}`);
                     await scheduleDB.deleteSchedule(id);
                 }
                 break;
@@ -124,12 +116,10 @@ export function useWebSocketDexie(url: string): WebSocketHook {
             case "schedule_started":
             case "schedule_stopped":
                 const updatedSchedule = message.data as Schedule;
-                console.log(`Updating schedule status in Dexie:`, updatedSchedule);
                 await scheduleDB.upsertSchedule(updatedSchedule);
                 break;
             
             default:
-                console.log(`Unhandled message type: ${message.type}`);
         }
     };
 
@@ -137,7 +127,6 @@ export function useWebSocketDexie(url: string): WebSocketHook {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify(message));
         } else {
-            console.warn("WebSocket is not connected");
         }
     };
 

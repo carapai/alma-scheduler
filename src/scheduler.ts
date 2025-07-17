@@ -4,10 +4,13 @@ import { scheduleService } from "./schedule-service";
 import { UnifiedQueue } from "./unified-queue";
 import { queryDHIS2 } from "./utils";
 import { webSocketService } from "./websocket-service";
+import { authService } from "./auth-service";
+import { Surreal } from "surrealdb";
 
 export class Scheduler {
     private jobQueue: UnifiedQueue<Record<string, any>, Record<string, any>>;
     private isInitialized = false;
+    private systemDb?: Surreal;
     constructor() {
         this.jobQueue = new UnifiedQueue<
             Record<string, any>,
@@ -20,21 +23,24 @@ export class Scheduler {
 
     async initialize() {
         if (this.isInitialized) return;
+                const authResponse = await authService.login({
+            username: "admin",
+            password: "admin123"
+        });
+        this.systemDb = await authService.createAuthenticatedConnection(authResponse.token);
         this.jobQueue.registerProcessor(
             "dhis2-alma-sync",
             this.jobQueue.createProgressTrackingProcessor(
                 async (job, updateProgress) => {
                     const scheduleId =
                         job.data.scheduleId || job.opts.jobId || "";
-                    console.log(
-                        `Processing job ${job.id} for schedule ${scheduleId}`,
-                    );
 
                     const runningSchedule =
                         await scheduleService.updateScheduleStatus(
                             scheduleId,
                             "running",
                             "Job started",
+                            this.systemDb!,
                         );
                     webSocketService.broadcastScheduleUpdate(runningSchedule);
                     try {
@@ -51,6 +57,7 @@ export class Scheduler {
                             await scheduleService.updateScheduleProgress(
                                 scheduleId,
                                 progressNum,
+                                this.systemDb!,
                             );
 
                             webSocketService.broadcastProgress(
@@ -67,6 +74,7 @@ export class Scheduler {
                                 scheduleId,
                                 "completed",
                                 "Job completed successfully",
+                                this.systemDb!,
                             );
                         webSocketService.broadcastScheduleUpdate(
                             completedSchedule,
@@ -81,6 +89,7 @@ export class Scheduler {
                                 error instanceof Error
                                     ? error.message
                                     : "Unknown error",
+                                this.systemDb!,
                             );
                         webSocketService.broadcastScheduleUpdate(
                             failedSchedule,
@@ -100,28 +109,29 @@ export class Scheduler {
     }
 
     async createSchedule(scheduleData: Schedule) {
-        const schedule = await scheduleService.createSchedule(scheduleData);
+        const schedule = await scheduleService.createSchedule(scheduleData, this.systemDb!);
         return schedule;
     }
 
     async updateSchedule(id: string, updates: Partial<Schedule>) {
-        const schedule = await scheduleService.updateSchedule(id, updates);
+        const schedule = await scheduleService.updateSchedule(id, updates, this.systemDb!);
         return schedule;
     }
 
     async startSchedule(id: string) {
-        const schedule = await scheduleService.getSchedule(id);
+        const schedule = await scheduleService.getSchedule(id, this.systemDb!);
         if (!schedule) {
             throw new Error(`Schedule ${id} not found`);
         }
 
-        await scheduleService.updateScheduleProgress(id, 0);
+        await scheduleService.updateScheduleProgress(id, 0, this.systemDb!);
         await scheduleService.updateScheduleStatus(
             id,
             "idle",
             "Ready to start",
+            this.systemDb!,
         );
-        const updatedSchedule = await scheduleService.getSchedule(id);
+        const updatedSchedule = await scheduleService.getSchedule(id, this.systemDb!);
         webSocketService.broadcastProgress(id, 0, "Starting job...");
 
         await this.setupJob(updatedSchedule!);
@@ -129,7 +139,7 @@ export class Scheduler {
     }
 
     async stopSchedule(id: string) {
-        const schedule = await scheduleService.getSchedule(id);
+        const schedule = await scheduleService.getSchedule(id, this.systemDb!);
         if (!schedule) {
             throw new Error(`Schedule ${id} not found`);
         }
@@ -141,7 +151,7 @@ export class Scheduler {
             await this.jobQueue.cancelJob(id);
         }
 
-        await scheduleService.deactivateSchedule(id);
+        await scheduleService.deactivateSchedule(id, this.systemDb!);
 
         return schedule;
     }
@@ -149,7 +159,7 @@ export class Scheduler {
     async deleteSchedule(id: string) {
         await this.stopSchedule(id);
 
-        await scheduleService.deleteSchedule(id);
+        await scheduleService.deleteSchedule(id, this.systemDb!);
 
         return true;
     }
@@ -192,12 +202,11 @@ export class Scheduler {
             data: jobData,
             jobOptions,
         });
-        console.log(`Scheduled job ${job.id} for schedule ${schedule.id}`);
         return job;
     }
 
     private async restoreActiveSchedules() {
-        const activeSchedules = await scheduleService.getActiveSchedules();
+        const activeSchedules = await scheduleService.getActiveSchedules(this.systemDb!);
 
         for (const schedule of activeSchedules) {
             if (schedule.type === "recurring" && schedule.cronExpression) {
@@ -207,7 +216,7 @@ export class Scheduler {
     }
 
     async getScheduleStatus(id: string) {
-        const schedule = await scheduleService.getSchedule(id);
+        const schedule = await scheduleService.getSchedule(id, this.systemDb!);
         if (!schedule) {
             throw new Error(`Schedule ${id} not found`);
         }
@@ -233,15 +242,18 @@ export class Scheduler {
     }
 
     async getAllSchedules() {
-        return await scheduleService.getAllSchedules();
+        return await scheduleService.getAllSchedules(this.systemDb!);
     }
 
     async getSchedulesByStatus(status: ScheduleStatus) {
-        return await scheduleService.getSchedulesByStatus(status);
+        return await scheduleService.getSchedulesByStatus(status, this.systemDb!);
     }
 
     async shutdown() {
         await this.jobQueue.close();
+        if (this.systemDb) {
+            await this.systemDb.close();
+        }
         await scheduleService.disconnect();
     }
 }

@@ -9,9 +9,11 @@ import {
     Form,
     Input,
     InputNumber,
+    Layout,
     Modal,
     Progress,
     Select,
+    Spin,
     Switch,
     Table,
     Tag,
@@ -25,6 +27,11 @@ import { v4 as uuidV4 } from "uuid";
 import { useWebSocketDexie } from "./useWebSocketDexie";
 import { useLiveQuery } from "dexie-react-hooks";
 import { scheduleDB } from "./dexie-db";
+import { AuthProvider, useAuth } from "./AuthContext";
+import { LoginForm } from "./LoginForm";
+import { AppHeader } from "./AppHeader";
+
+const { Content } = Layout;
 
 const getStatusColor = (status?: string) => {
     switch (status) {
@@ -72,7 +79,7 @@ const defaultSchedule: Omit<Schedule, "id" | "createdAt" | "updatedAt"> = {
     },
 };
 
-export function App() {
+function ScheduleManagement() {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isEditing, setIsEditing] = useState<boolean>(false);
     const [current, setCurrent] = useState<Schedule>(
@@ -88,7 +95,9 @@ export function App() {
     useEffect(() => {
         const loadInitialData = async () => {
             try {
-                const response = await fetch("/api/schedules");
+                const response = await fetch("/api/schedules", {
+                    credentials: "include", // Include cookies for authentication
+                });
                 if (response.ok) {
                     const data = await response.json();
                     if (data.success && data.schedules) {
@@ -114,8 +123,8 @@ export function App() {
         const loadStaticData = async () => {
             try {
                 const [processorsRes, instancesRes] = await Promise.all([
-                    fetch("/api/processors"),
-                    fetch("/api/instances"),
+                    fetch("/api/processors", { credentials: "include" }),
+                    fetch("/api/instances", { credentials: "include" }),
                 ]);
 
                 if (processorsRes.ok) {
@@ -145,7 +154,6 @@ export function App() {
     // Handle WebSocket messages and update Dexie
     useEffect(() => {
         if (lastMessage) {
-            console.log("WebSocket message received:", lastMessage);
 
             const handleWebSocketMessage = async () => {
                 try {
@@ -161,9 +169,6 @@ export function App() {
                                         progress: number;
                                         message?: string;
                                     };
-                                console.log(
-                                    `Updating Dexie progress for ${id}: ${progress}%`,
-                                );
                                 await scheduleDB.updateScheduleProgress(
                                     id,
                                     progress,
@@ -175,20 +180,12 @@ export function App() {
                         case "schedule_update":
                             if ("id" in lastMessage.data) {
                                 const schedule = lastMessage.data as Schedule;
-                                console.log(
-                                    `Updating Dexie schedule:`,
-                                    schedule,
-                                );
                                 await scheduleDB.upsertSchedule(schedule);
                             }
                             break;
 
                         case "schedule_created":
                             const newSchedule = lastMessage.data as Schedule;
-                            console.log(
-                                `Adding new schedule to Dexie:`,
-                                newSchedule,
-                            );
                             await scheduleDB.upsertSchedule(newSchedule);
                             break;
 
@@ -197,9 +194,6 @@ export function App() {
                                 const { id } = lastMessage.data as {
                                     id: string;
                                 };
-                                console.log(
-                                    `Deleting schedule from Dexie: ${id}`,
-                                );
                                 await scheduleDB.deleteSchedule(id);
                             }
                             break;
@@ -208,17 +202,10 @@ export function App() {
                         case "schedule_stopped":
                             const updatedSchedule =
                                 lastMessage.data as Schedule;
-                            console.log(
-                                `Updating schedule status in Dexie:`,
-                                updatedSchedule,
-                            );
                             await scheduleDB.upsertSchedule(updatedSchedule);
                             break;
 
                         default:
-                            console.log(
-                                `Unhandled message type: ${lastMessage.type}`,
-                            );
                     }
                 } catch (error) {
                     console.error("Error handling WebSocket message:", error);
@@ -248,6 +235,7 @@ export function App() {
                 `/api/schedules/${schedule.id}/start`,
                 {
                     method: "POST",
+                    credentials: "include",
                 },
             );
             if (response.ok) {
@@ -263,6 +251,7 @@ export function App() {
         try {
             const response = await fetch(`/api/schedules/${schedule.id}/stop`, {
                 method: "POST",
+                credentials: "include",
             });
             if (response.ok) {
                 const data = await response.json();
@@ -279,6 +268,7 @@ export function App() {
             try {
                 const response = await fetch(`/api/schedules/${schedule.id}`, {
                     method: "DELETE",
+                    credentials: "include",
                 });
                 if (response.ok) {
                     // Update Dexie directly
@@ -493,11 +483,11 @@ export function App() {
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify(values),
+                credentials: "include",
             });
 
             if (response.ok) {
                 const data = await response.json();
-                // Update Dexie directly
                 await scheduleDB.upsertSchedule(data.schedule);
                 setIsModalOpen(false);
                 setIsEditing(false);
@@ -513,10 +503,14 @@ export function App() {
 
     return (
         <Flex
-            className="h-screen w-screen"
             vertical
             gap="16px"
-            style={{ padding: "16px", backgroundColor: "#f5f5f5" }}
+            style={{
+                padding: "16px",
+                backgroundColor: "#f5f5f5",
+                height: "calc(100vh - 64px)",
+                width: "100vw",
+            }}
         >
             <Flex justify="space-between" align="center">
                 <Flex align="center" gap="16px">
@@ -808,6 +802,46 @@ export function App() {
                 </Form>
             </Modal>
         </Flex>
+    );
+}
+
+const AppContent: React.FC = () => {
+    const { user, loading, login } = useAuth();
+
+    if (loading) {
+        return (
+            <div
+                style={{
+                    minHeight: "100vh",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
+            >
+                <Spin size="large" />
+            </div>
+        );
+    }
+
+    if (!user) {
+        return <LoginForm onLogin={login} />;
+    }
+
+    return (
+        <Layout>
+            <AppHeader />
+            <Content>
+                <ScheduleManagement />
+            </Content>
+        </Layout>
+    );
+};
+
+export function App() {
+    return (
+        <AuthProvider>
+            <AppContent />
+        </AuthProvider>
     );
 }
 

@@ -28,16 +28,10 @@ export class WebSocketService {
 
     addConnection(ws: ServerWebSocket<any>) {
         this.connections.add(ws);
-        console.log(
-            `WebSocket connected. Total connections: ${this.connections.size}`,
-        );
     }
 
     removeConnection(ws: ServerWebSocket<any>) {
         this.connections.delete(ws);
-        console.log(
-            `WebSocket disconnected. Total connections: ${this.connections.size}`,
-        );
     }
 
     broadcast(message: WebSocketMessage) {
@@ -57,7 +51,6 @@ export class WebSocketService {
         });
 
         if (sentCount > 0) {
-            console.log(`Broadcast ${message.type} to ${sentCount} clients`);
         }
     }
 
@@ -111,7 +104,6 @@ export class WebSocketService {
     }
 
     broadcastProgress(id: string, progress: number, message?: string) {
-        console.log(`Broadcasting progress update: ${id} - ${progress}% - ${message}`);
         this.broadcast({
             type: "progress_update",
             data: { id, progress, message },

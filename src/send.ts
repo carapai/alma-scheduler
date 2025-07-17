@@ -25,6 +25,4 @@ const runManually = async (id: string) => {
     // await queryDHIS2(schedule, "202501");
 };
 
-runManually("13002d4e-2240-4ec3-be3f-fc7d9df12796").then(() =>
-    console.log("Done"),
-);
+runManually("13002d4e-2240-4ec3-be3f-fc7d9df12796");

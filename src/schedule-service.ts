@@ -1,54 +1,20 @@
-import { RecordId, s, Surreal } from "surrealdb";
-import { surrealdbNodeEngines } from "@surrealdb/node";
-import { ISchedule, Schedule, ScheduleStatus } from "./interfaces";
+import { RecordId, Surreal } from "surrealdb";
 import { v4 as uuidv4 } from "uuid";
+import { BaseService } from "./base-service";
+import { ISchedule, Schedule, ScheduleStatus } from "./interfaces";
 
-export class ScheduleService {
-    private db: Surreal;
-    private isConnected = false;
-    private isInitialized = false;
-
-    constructor() {
-        this.db = new Surreal({
-            engines: surrealdbNodeEngines(),
-        });
-    }
-    async connect() {
-        if (!this.isConnected) {
-            await this.db.connect("surrealkv://scheduler", {
-                database: "scheduler",
-                namespace: "scheduler",
-            });
-            this.isConnected = true;
-            if (!this.isInitialized) {
-                await this.initializeSchema();
-                this.isInitialized = true;
-            }
-        }
+export class ScheduleService extends BaseService {
+    protected async initializeSchema() {
+        // Schema is initialized by auth-service.ts
+        // No need to redefine tables here
     }
 
-    async disconnect() {
-        if (this.isConnected) {
-            await this.db.close();
-            this.isConnected = false;
-        }
+    private getDatabase(authenticatedDb: Surreal): Surreal {
+        return authenticatedDb;
     }
 
-    private async initializeSchema() {
-        try {
-            await this.db.query(`
-                    DEFINE TABLE OVERWRITE schedules SCHEMALESS PERMISSIONS FULL;
-                `);
-        } catch (defineError) {
-            console.warn(
-                "Schema already defined or error during schema definition:",
-                defineError,
-            );
-        }
-    }
-
-    async createSchedule(scheduleData: Schedule): Promise<Schedule> {
-        await this.connect();
+    async createSchedule(scheduleData: Schedule, authenticatedDb: Surreal): Promise<Schedule> {
+        const db = this.getDatabase(authenticatedDb);
 
         const now = new Date();
 
@@ -59,28 +25,31 @@ export class ScheduleService {
             updatedAt: now,
         };
 
-        const [result] = await this.db.insert<ISchedule>(
+        const [result] = await db.insert<ISchedule>(
             "schedules",
             insertData,
         );
 
+		
         return {
             ...result,
-            id: String(result.id.id),
+            id: String(insertData.id.id),
         };
     }
 
     async updateSchedule(
         id: string,
         updates: Partial<Schedule>,
+        authenticatedDb: Surreal
     ): Promise<Schedule> {
-        await this.connect();
+        const db = this.getDatabase(authenticatedDb);
+        
         const updatedData = {
             ...updates,
             updatedAt: new Date(),
             id: new RecordId("schedules", id),
         };
-        const result = await this.db.merge<ISchedule>(
+        const result = await db.merge<ISchedule>(
             new RecordId("schedules", id),
             updatedData,
         );
@@ -90,9 +59,10 @@ export class ScheduleService {
         };
     }
 
-    async getSchedule(id: string): Promise<Schedule | null> {
-        await this.connect();
-        const result = await this.db.select<ISchedule>(
+    async getSchedule(id: string, authenticatedDb: Surreal): Promise<Schedule | null> {
+        const db = this.getDatabase(authenticatedDb);
+        
+        const result = await db.select<ISchedule>(
             new RecordId("schedules", id),
         );
 
@@ -102,9 +72,10 @@ export class ScheduleService {
         };
     }
 
-    async getAllSchedules(): Promise<Schedule[]> {
-        await this.connect();
-        const [result] = await this.db.query<[ISchedule[]]>(
+    async getAllSchedules(authenticatedDb: Surreal): Promise<Schedule[]> {
+        const db = this.getDatabase(authenticatedDb);
+        
+        const [result] = await db.query<[ISchedule[]]>(
             "SELECT * FROM schedules ORDER BY createdAt DESC",
         );
         return result.map((schedule) => {
@@ -115,9 +86,10 @@ export class ScheduleService {
         });
     }
 
-    async getActiveSchedules(): Promise<Schedule[]> {
-        await this.connect();
-        const [result] = await this.db.query<[ISchedule[]]>(
+    async getActiveSchedules(authenticatedDb: Surreal): Promise<Schedule[]> {
+        const db = this.getDatabase(authenticatedDb);
+        
+        const [result] = await db.query<[ISchedule[]]>(
             "SELECT * FROM schedules WHERE isActive = true",
         );
         return result.map((schedule) => {
@@ -128,10 +100,10 @@ export class ScheduleService {
         });
     }
 
-    async getSchedulesByStatus(status: ScheduleStatus): Promise<Schedule[]> {
-        await this.connect();
+    async getSchedulesByStatus(status: ScheduleStatus, authenticatedDb: Surreal): Promise<Schedule[]> {
+        const db = this.getDatabase(authenticatedDb);
 
-        const [result] = await this.db.query<[ISchedule[]]>(
+        const [result] = await db.query<[ISchedule[]]>(
             "SELECT * FROM schedules WHERE status = $status",
             {
                 status,
@@ -145,19 +117,21 @@ export class ScheduleService {
         });
     }
 
-    async deleteSchedule(id: string): Promise<boolean> {
-        await this.connect();
+    async deleteSchedule(id: string, authenticatedDb: Surreal): Promise<boolean> {
+        const db = this.getDatabase(authenticatedDb);
 
-        const result = await this.db.delete(new RecordId("schedules", id));
+        const result = await db.delete(new RecordId("schedules", id));
         return !!result;
     }
 
     async updateScheduleStatus(
         id: string,
         status: ScheduleStatus,
-        message?: string,
+        message: string | undefined,
+        authenticatedDb: Surreal
     ) {
-        await this.connect();
+        const db = this.getDatabase(authenticatedDb);
+        
         const updates: Partial<ISchedule> = {
             status,
             lastStatus: status,
@@ -168,7 +142,12 @@ export class ScheduleService {
             updates.message = message;
         }
 
-        const result = await this.db.merge<ISchedule>(
+        // Update lastRun when schedule completes or fails
+        if (status === "completed" || status === "failed") {
+            updates.lastRun = new Date();
+        }
+
+        const result = await db.merge<ISchedule>(
             new RecordId("schedules", id),
             updates,
         );
@@ -179,10 +158,11 @@ export class ScheduleService {
     async updateScheduleProgress(
         id: string,
         progress: number,
+        authenticatedDb: Surreal
     ): Promise<Schedule> {
-        await this.connect();
+        const db = this.getDatabase(authenticatedDb);
 
-        const result = await this.db.merge<ISchedule>(
+        const result = await db.merge<ISchedule>(
             new RecordId("schedules", id),
             {
                 progress,
@@ -192,10 +172,10 @@ export class ScheduleService {
         return { ...result, id: id };
     }
 
-    async setScheduleJobId(id: string, jobId: string): Promise<Schedule> {
-        await this.connect();
+    async setScheduleJobId(id: string, jobId: string, authenticatedDb: Surreal): Promise<Schedule> {
+        const db = this.getDatabase(authenticatedDb);
 
-        const result = await this.db.merge<ISchedule>(
+        const result = await db.merge<ISchedule>(
             new RecordId("schedules", id),
             {
                 currentJobId: jobId,
@@ -205,13 +185,13 @@ export class ScheduleService {
         return { ...result, id: id };
     }
 
-    async activateSchedule(id: string): Promise<Schedule> {
-        const result = await this.updateSchedule(id, { isActive: true });
+    async activateSchedule(id: string, authenticatedDb: Surreal): Promise<Schedule> {
+        const result = await this.updateSchedule(id, { isActive: true }, authenticatedDb);
         return result;
     }
 
-    async deactivateSchedule(id: string): Promise<Schedule> {
-        return this.updateSchedule(id, { isActive: false, status: "idle" });
+    async deactivateSchedule(id: string, authenticatedDb: Surreal): Promise<Schedule> {
+        return this.updateSchedule(id, { isActive: false, status: "idle" }, authenticatedDb);
     }
 }
 

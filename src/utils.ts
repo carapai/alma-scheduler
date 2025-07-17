@@ -70,6 +70,7 @@ export async function downloadCSV({
             name,
             almaInstance,
         });
+        console.log(`Data uploaded for ${name}:`, response);
     } catch (error) {
         console.log(error);
     }
@@ -105,7 +106,6 @@ export const sendToAlma = async ({
             );
             form.append("file", jsonBlob, "temp.json");
             console.log(`Uploading data for ${name} to ALMA`);
-
             const { data: finalResponse } = await almaApi.put(
                 `scorecard/${scorecard}/upload/dhis`,
                 form,
@@ -135,7 +135,6 @@ export const queryDHIS2 = async (
         runFor,
         almaInstance,
     } = data;
-    console.log("queryDHIS2", data);
     if (!dhisInstances[dhis2Instance]) {
         throw new Error(`No dhis2 instance found for ${dhis2Instance}`);
     }
