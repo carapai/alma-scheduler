@@ -21,15 +21,12 @@ const db = new Dexie('SchedulerDB') as Dexie & {
   progress: EntityTable<ScheduleProgress, 'id'>;
 };
 
-// Schema definition
 db.version(1).stores({
   schedules: 'id, name, type, status, progress, isActive, createdAt, updatedAt',
   progress: 'id, progress, status, lastUpdated'
 });
 
-// Helper functions
 export const scheduleDB = {
-  // Schedule operations
   async upsertSchedule(schedule: Schedule): Promise<void> {
     await db.schedules.put({
       ...schedule,

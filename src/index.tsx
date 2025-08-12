@@ -3,9 +3,6 @@ import { Schedule } from "@/interfaces";
 import { serve } from "bun";
 import index from "./index.html";
 import { webSocketService } from "./websocket-service";
-import { AuthRoutes } from "./auth-routes";
-import { AuthMiddleware, AuthenticatedRequest } from "./auth-middleware";
-import { scheduleService } from "./schedule-service";
 
 // Initialize scheduler
 try {
@@ -24,8 +21,7 @@ const server = serve({
         close(ws) {
             webSocketService.removeConnection(ws);
         },
-        message(_ws, _message) {
-        },
+        message(_ws, _message) {},
     },
     routes: {
         "/ws": {
@@ -38,56 +34,8 @@ const server = serve({
             },
         },
         "/*": index,
-        "/api/auth/login": {
-            async POST(req: Request) {
-                return AuthRoutes.handleLogin(req);
-            },
-        },
-        "/api/auth/register": {
-            async POST(req: Request) {
-                return AuthRoutes.handleRegister(req);
-            },
-        },
-        "/api/auth/logout": {
-            async POST(req: AuthenticatedRequest) {
-                return AuthRoutes.handleLogout(req);
-            },
-        },
-        "/api/auth/profile": {
-            async GET(req: AuthenticatedRequest) {
-                return AuthRoutes.handleProfile(req);
-            },
-        },
-        "/api/auth/change-password": {
-            async POST(req: AuthenticatedRequest) {
-                return AuthRoutes.handleChangePassword(req);
-            },
-        },
-        "/api/auth/users": {
-            async GET(req: AuthenticatedRequest) {
-                return AuthRoutes.handleGetUsers(req);
-            },
-            async POST(req: AuthenticatedRequest) {
-                return AuthRoutes.handleCreateUser(req);
-            },
-        },
-        "/api/auth/users/:id": {
-            async PUT(req: AuthenticatedRequest & { params: { id: string } }) {
-                return AuthRoutes.handleUpdateUser(req, req.params.id);
-            },
-            async DELETE(req: AuthenticatedRequest & { params: { id: string } }) {
-                return AuthRoutes.handleDeleteUser(req, req.params.id);
-            },
-        },
         "/api/processors": {
-            async GET(req: AuthenticatedRequest) {
-                const middleware = AuthMiddleware.requirePermission("processors", "read");
-                const authResponse = await middleware(req);
-                
-                if (authResponse) {
-                    return authResponse;
-                }
-
+            async GET(req: Request) {
                 return Response.json(
                     {
                         success: true,
@@ -97,15 +45,33 @@ const server = serve({
                 );
             },
         },
-        "/api/instances": {
-            async GET(req: AuthenticatedRequest) {
-                const middleware = AuthMiddleware.requirePermission("instances", "read");
-                const authResponse = await middleware(req);
-                
-                if (authResponse) {
-                    return authResponse;
+        "/api/queue/stats": {
+            async GET(req: Request) {
+                try {
+                    const stats = await scheduler.getQueueStats();
+                    return Response.json(
+                        {
+                            success: true,
+                            stats,
+                        },
+                        { status: 200 },
+                    );
+                } catch (error) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error),
+                        },
+                        { status: 500 },
+                    );
                 }
-
+            },
+        },
+        "/api/instances": {
+            async GET(req: Request) {
                 const file = Bun.file("configuration.json");
                 const {
                     "dhis2-instances": dhisInstances,
@@ -131,16 +97,9 @@ const server = serve({
             },
         },
         "/api/schedules": {
-            async GET(req: AuthenticatedRequest) {
-                const middleware = AuthMiddleware.requirePermission("schedules", "read");
-                const authResponse = await middleware(req);
-                
-                if (authResponse) {
-                    return authResponse;
-                }
-
+            async GET(req: Request) {
                 try {
-                    const schedules = await scheduleService.getAllSchedules(req.db!);
+                    const schedules = await scheduler.getAllSchedules();
                     return Response.json(
                         {
                             success: true,
@@ -162,20 +121,10 @@ const server = serve({
                     );
                 }
             },
-            async POST(req: AuthenticatedRequest & { json: () => Schedule | PromiseLike<Schedule> }) {
-                const middleware = AuthMiddleware.requirePermission("schedules", "create");
-                const authResponse = await middleware(req);
-                
-                if (authResponse) {
-                    return authResponse;
-                }
-
+            async POST(req: Request) {
                 try {
                     const scheduleData = await req.json();
-                    const schedule = await scheduleService.createSchedule(
-                        scheduleData,
-                        req.db!
-                    );
+                    const schedule = await scheduler.createSchedule(scheduleData);
                     webSocketService.broadcastScheduleCreated(schedule);
 
                     return Response.json(
@@ -200,21 +149,24 @@ const server = serve({
             },
         },
         "/api/schedules/:id": {
-            async GET(req: AuthenticatedRequest & { params: { id: string } }) {
-                const middleware = AuthMiddleware.requirePermission("schedules", "read");
-                const authResponse = await middleware(req);
-                
-                if (authResponse) {
-                    return authResponse;
+            async GET(req: Request & { params: { id: string } }) {
+                if (!req.params.id) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error: "Schedule ID is required",
+                        },
+                        { status: 400 },
+                    );
                 }
 
                 try {
-                    const schedule = await scheduleService.getSchedule(req.params.id, req.db!);
-						                    if (!schedule) {
+                    const scheduleStatus = await scheduler.getScheduleStatus(req.params.id);
+                    if (!scheduleStatus.schedule) {
                         return Response.json(
                             {
                                 success: false,
-                                error: "Schedule not found"
+                                error: "Schedule not found",
                             },
                             { status: 404 },
                         );
@@ -223,7 +175,8 @@ const server = serve({
                     return Response.json(
                         {
                             success: true,
-                            schedule,
+                            schedule: scheduleStatus.schedule,
+                            jobStatus: scheduleStatus.jobStatus,
                         },
                         { status: 200 },
                     );
@@ -240,17 +193,20 @@ const server = serve({
                     );
                 }
             },
-            async DELETE(req: AuthenticatedRequest & { params: { id: string } }) {
-                const middleware = AuthMiddleware.requirePermission("schedules", "delete");
-                const authResponse = await middleware(req);
-                
-                if (authResponse) {
-                    return authResponse;
+            async DELETE(req: Request & { params: { id: string } }) {
+                if (!req.params.id) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error: "Schedule ID is required",
+                        },
+                        { status: 400 },
+                    );
                 }
 
                 try {
-                    const success = await scheduleService.deleteSchedule(req.params.id, req.db!);
-                    
+                    const success = await scheduler.deleteSchedule(req.params.id);
+
                     if (success) {
                         // Broadcast the schedule deletion
                         webSocketService.broadcastScheduleDeleted(req.params.id);
@@ -266,7 +222,7 @@ const server = serve({
                         return Response.json(
                             {
                                 success: false,
-                                error: "Schedule not found"
+                                error: "Schedule not found",
                             },
                             { status: 404 },
                         );
@@ -284,24 +240,20 @@ const server = serve({
                     );
                 }
             },
-            async PUT(req: AuthenticatedRequest & {
-                params: { id: string };
-                json: () => Partial<Schedule> | PromiseLike<Partial<Schedule>>;
-            }) {
-                const middleware = AuthMiddleware.requirePermission("schedules", "update");
-                const authResponse = await middleware(req);
-                
-                if (authResponse) {
-                    return authResponse;
+            async PUT(req: Request & { params: { id: string } }) {
+                if (!req.params.id) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error: "Schedule ID is required",
+                        },
+                        { status: 400 },
+                    );
                 }
 
                 try {
                     const updates = await req.json();
-                    const schedule = await scheduleService.updateSchedule(
-                        req.params.id,
-                        updates,
-                        req.db!
-                    );
+                    const schedule = await scheduler.updateSchedule(req.params.id, updates);
                     webSocketService.broadcastScheduleUpdate(schedule);
 
                     return Response.json(
@@ -326,19 +278,19 @@ const server = serve({
             },
         },
         "/api/schedules/:id/start": {
-            async POST(req: AuthenticatedRequest & { params: { id: string } }) {
-                const middleware = AuthMiddleware.requirePermission("schedules", "start");
-                const authResponse = await middleware(req);
-                
-                if (authResponse) {
-                    return authResponse;
+            async POST(req: Request & { params: { id: string } }) {
+                if (!req.params.id) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error: "Schedule ID is required",
+                        },
+                        { status: 400 },
+                    );
                 }
 
                 try {
-                    const schedule = await scheduleService.activateSchedule(
-                        req.params.id,
-                        req.db!
-                    );
+                    const schedule = await scheduler.startSchedule(req.params.id);
                     webSocketService.broadcastScheduleStarted(schedule);
                     return Response.json(
                         {
@@ -362,20 +314,19 @@ const server = serve({
             },
         },
         "/api/schedules/:id/stop": {
-            async POST(req: AuthenticatedRequest & { params: { id: string } }) {
-                const middleware = AuthMiddleware.requirePermission("schedules", "stop");
-                const authResponse = await middleware(req);
-                
-                if (authResponse) {
-                    return authResponse;
+            async POST(req: Request & { params: { id: string } }) {
+                if (!req.params.id) {
+                    return Response.json(
+                        {
+                            success: false,
+                            error: "Schedule ID is required",
+                        },
+                        { status: 400 },
+                    );
                 }
 
                 try {
-                    const schedule = await scheduleService.deactivateSchedule(
-                        req.params.id,
-                        req.db!
-                    );
-
+                    const schedule = await scheduler.stopSchedule(req.params.id);
                     webSocketService.broadcastScheduleStopped(schedule);
 
                     return Response.json(
@@ -402,7 +353,6 @@ const server = serve({
     },
     development: process.env.NODE_ENV !== "production",
 });
-
 
 // Graceful shutdown
 process.on("SIGINT", async () => {

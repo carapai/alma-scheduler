@@ -13,7 +13,6 @@ import {
     Modal,
     Progress,
     Select,
-    Spin,
     Switch,
     Table,
     Tag,
@@ -27,8 +26,6 @@ import { v4 as uuidV4 } from "uuid";
 import { useWebSocketDexie } from "./useWebSocketDexie";
 import { useLiveQuery } from "dexie-react-hooks";
 import { scheduleDB } from "./dexie-db";
-import { AuthProvider, useAuth } from "./AuthContext";
-import { LoginForm } from "./LoginForm";
 import { AppHeader } from "./AppHeader";
 
 const { Content } = Layout;
@@ -95,9 +92,7 @@ function ScheduleManagement() {
     useEffect(() => {
         const loadInitialData = async () => {
             try {
-                const response = await fetch("/api/schedules", {
-                    credentials: "include", // Include cookies for authentication
-                });
+                const response = await fetch("/api/schedules");
                 if (response.ok) {
                     const data = await response.json();
                     if (data.success && data.schedules) {
@@ -111,9 +106,7 @@ function ScheduleManagement() {
 
         loadInitialData();
     }, []);
-
-    // Load processors and instances separately (these don't need real-time updates)
-    const [processors, setProcessors] = useState<string[]>([]);
+		const [processors, setProcessors] = useState<string[]>([]);
     const [instances, setInstances] = useState<{
         dhis2Instances: string[];
         almaInstances: string[];
@@ -123,8 +116,8 @@ function ScheduleManagement() {
         const loadStaticData = async () => {
             try {
                 const [processorsRes, instancesRes] = await Promise.all([
-                    fetch("/api/processors", { credentials: "include" }),
-                    fetch("/api/instances", { credentials: "include" }),
+                    fetch("/api/processors"),
+                    fetch("/api/instances"),
                 ]);
 
                 if (processorsRes.ok) {
@@ -235,7 +228,6 @@ function ScheduleManagement() {
                 `/api/schedules/${schedule.id}/start`,
                 {
                     method: "POST",
-                    credentials: "include",
                 },
             );
             if (response.ok) {
@@ -251,7 +243,6 @@ function ScheduleManagement() {
         try {
             const response = await fetch(`/api/schedules/${schedule.id}/stop`, {
                 method: "POST",
-                credentials: "include",
             });
             if (response.ok) {
                 const data = await response.json();
@@ -264,18 +255,29 @@ function ScheduleManagement() {
     };
 
     const handleDelete = async (schedule: Schedule) => {
-        if (window.confirm("Are you sure you want to delete this schedule?")) {
+        if (window.confirm(`Are you sure you want to delete "${schedule.name}"? This action cannot be undone.`)) {
             try {
                 const response = await fetch(`/api/schedules/${schedule.id}`, {
                     method: "DELETE",
-                    credentials: "include",
                 });
+                
                 if (response.ok) {
-                    // Update Dexie directly
-                    await scheduleDB.deleteSchedule(schedule.id);
+                    const data = await response.json();
+                    console.log(`✅ Schedule "${schedule.name}" deleted successfully from server`);
+                    try {
+                        await scheduleDB.deleteSchedule(schedule.id);
+                        console.log(`✅ Schedule "${schedule.name}" removed from local storage`);
+                    } catch (dexieError) {
+                        console.warn("Failed to remove from local storage:", dexieError);
+                    }
+                } else {
+                    const errorData = await response.json();
+                    console.error("Failed to delete schedule:", errorData.error);
+                    alert(`Failed to delete schedule: ${errorData.error}`);
                 }
             } catch (error) {
                 console.error("Failed to delete schedule:", error);
+                alert("Failed to delete schedule. Please try again.");
             }
         }
     };
@@ -483,7 +485,6 @@ function ScheduleManagement() {
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify(values),
-                credentials: "include",
             });
 
             if (response.ok) {
@@ -805,28 +806,7 @@ function ScheduleManagement() {
     );
 }
 
-const AppContent: React.FC = () => {
-    const { user, loading, login } = useAuth();
-
-    if (loading) {
-        return (
-            <div
-                style={{
-                    minHeight: "100vh",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                }}
-            >
-                <Spin size="large" />
-            </div>
-        );
-    }
-
-    if (!user) {
-        return <LoginForm onLogin={login} />;
-    }
-
+export function App() {
     return (
         <Layout>
             <AppHeader />
@@ -834,14 +814,6 @@ const AppContent: React.FC = () => {
                 <ScheduleManagement />
             </Content>
         </Layout>
-    );
-};
-
-export function App() {
-    return (
-        <AuthProvider>
-            <AppContent />
-        </AuthProvider>
     );
 }
 

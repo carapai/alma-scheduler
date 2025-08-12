@@ -3,6 +3,7 @@ import { JobProgress, JobsOptions } from "bullmq";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import quarterOfYear from "dayjs/plugin/quarterOfYear";
+import { webSocketService } from "./websocket-service";
 
 dayjs.extend(quarterOfYear);
 dayjs.extend(advancedFormat);
@@ -183,11 +184,14 @@ export const queryDHIS2 = async (
                 fields: "id,name,numerator,denominator,decimals,indicatorType[id,name],annualized",
             },
         });
-        const totalIterations = 6 * indicators.length * availablePeriod.length;
+        const actualIndicators = indicators;
+        const levels = 6;
+        const totalIterations =
+            levels * actualIndicators.length * availablePeriod.length;
         let count = 0;
         for (const p of availablePeriod) {
-            for (let level = 1; level <= 6; level++) {
-                for (const [index, x] of indicators.entries()) {
+            for (let level = 1; level <= levels; level++) {
+                for (const [index, x] of actualIndicators.entries()) {
                     count++;
                     console.log(
                         `Processing ${
@@ -208,6 +212,10 @@ export const queryDHIS2 = async (
                         almaInstance,
                     });
                     const progress = (count / totalIterations) * 100;
+                    webSocketService.broadcastProgress(
+                        data["scheduleId"],
+                        progress,
+                    );
                     await updateProgress(progress);
                 }
             }

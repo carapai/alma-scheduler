@@ -111,17 +111,29 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
                 autorun: true,
             },
         );
-        this.worker.on("completed", (job, result) => {});
+        this.worker.on("completed", (job, result) => {
+            console.log(`✅ Job ${job.id} completed successfully`);
+        });
 
-        this.worker.on("failed", (job, error) => {});
+        this.worker.on("failed", (job, error) => {
+            console.error(`❌ Job ${job?.id} failed:`, error.message);
+        });
 
-        this.worker.on("error", (error) => {});
+        this.worker.on("error", (error) => {
+            console.error("🚨 Worker error:", error);
+        });
 
-        this.worker.on("active", (job) => {});
+        this.worker.on("active", (job) => {
+            console.log(`🔄 Job ${job.id} started processing`);
+        });
 
-        this.worker.on("ready", () => {});
+        this.worker.on("ready", () => {
+            console.log("✅ Worker is ready");
+        });
 
-        this.worker.on("stalled", (jobId) => {});
+        this.worker.on("stalled", (jobId) => {
+            console.warn(`⚠️ Job ${jobId} stalled`);
+        });
         return this.worker;
     }
 
@@ -384,5 +396,46 @@ export class UnifiedQueue<JobData extends Record<string, any>, JobDataResult> {
     }
     getProcessors() {
         return Array.from(this.processorMap.keys());
+    }
+
+    /**
+     * Get queue statistics for monitoring
+     */
+    async getQueueStats() {
+        try {
+            const waiting = await this.queue.getWaiting();
+            const active = await this.queue.getActive();
+            const completed = await this.queue.getCompleted();
+            const failed = await this.queue.getFailed();
+            const delayed = await this.queue.getDelayed();
+            
+            return {
+                waiting: waiting.length,
+                active: active.length,
+                completed: completed.length,
+                failed: failed.length,
+                delayed: delayed.length,
+                total: waiting.length + active.length + completed.length + failed.length + delayed.length
+            };
+        } catch (error) {
+            console.error('Error getting queue stats:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Get detailed job information by schedule ID
+     */
+    async getJobByScheduleId(scheduleId: string) {
+        try {
+            const allJobs = await this.getJobs(['waiting', 'active', 'delayed', 'completed', 'failed']);
+            return allJobs.find(job => 
+                job.data?.scheduleId === scheduleId || 
+                job.opts?.jobId === scheduleId
+            );
+        } catch (error) {
+            console.error('Error finding job by schedule ID:', error);
+            return null;
+        }
     }
 }

@@ -31,7 +31,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         try {
             const response = await fetch('/api/auth/profile', {
                 method: 'GET',
-                credentials: 'include', // Include cookies in request
+                credentials: 'include',
             });
 
             if (response.ok) {
@@ -57,7 +57,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         try {
             await fetch('/api/auth/logout', {
                 method: 'POST',
-                credentials: 'include', // Include cookies in request
+                credentials: 'include',
             });
         } catch (error) {
             console.error('Logout failed:', error);
